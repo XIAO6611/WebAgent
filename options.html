@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Agent 全局设置</title>
+  <style>
+    body { font-family: sans-serif; padding: 40px; max-width: 600px; margin: 0 auto; background: #f9f9f9; }
+    .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 20px; }
+    h2 { color: #333; margin-top: 0; }
+    label { font-weight: bold; display: block; margin-bottom: 8px; font-size: 14px; }
+    input, textarea { width: 100%; padding: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 15px; }
+    textarea { height: 150px; font-family: monospace; }
+    button { background: #1890ff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 16px; }
+    button:hover { background: #40a9ff; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>🔒 核心凭证配置</h2>
+    <label>API Key (智谱或阿里云)</label>
+    <input type="password" id="apiKey" placeholder="sk-xxxxxxxxxxxxxxxxxxx">
+  </div>
+
+  <div class="card">
+    <h2>🧠 本地知识库 (简历/个人信息 JSON)</h2>
+    <label>填写标准 JSON 格式数据，Agent 将基于此数据进行填表：</label>
+    <textarea id="knowledgeBase" placeholder='{&#10;  "name": "张三",&#10;  "phone": "13800138000",&#10;  "education": "中山大学"&#10;}'></textarea>
+  </div>
+
+  <button id="saveBtn">保存全部设置</button>
+  <span id="status" style="margin-left: 15px; color: green; font-weight: bold;"></span>
+
+  <script src="options.js"></script>
+</body>
+</html>
