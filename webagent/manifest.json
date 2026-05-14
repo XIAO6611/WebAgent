@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "多模态 Web Agent",
+  "version": "2.0.0",
+  "permissions": ["activeTab", "scripting", "storage", "tabs", "downloads"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/background/index.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "src/ui/popup/popup.html"
+  },
+  "options_page": "src/ui/options/options.html",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "src/content/uiInjector.js",
+        "src/content/domScanner.js",
+        "src/content/actionExecutor.js",
+        "src/content/index.js"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { width: 320px; padding: 15px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    h3 { margin-top: 0; color: #1f2937; }
+    textarea { width: 100%; height: 60px; resize: none; margin-bottom: 8px; padding: 8px; box-sizing: border-box; border: 1px solid #d1d5db; border-radius: 6px;}
+    
+    /* 新增的提示语样式 */
+    .hint-box { font-size: 12px; color: #4b5563; background: #f3f4f6; padding: 8px; border-radius: 4px; margin-bottom: 12px; line-height: 1.4; border-left: 3px solid #3b82f6;}
+    .hint-box code { color: #2563eb; font-weight: bold; font-family: monospace;}
+    
+    button { width: 100%; padding: 10px; border: none; cursor: pointer; border-radius: 6px; font-weight: 600; font-size: 14px; transition: all 0.2s;}
+    .btn-start { background: #3b82f6; color: white; }
+    .btn-start:hover { background: #2563eb; }
+    .btn-stop { background: #ef4444; color: white; }
+    .btn-stop:hover { background: #dc2626; }
+    .btn-options { background: #e5e7eb; color: #374151; margin-top: 10px; }
+    .btn-options:hover { background: #d1d5db; }
+    
+    #logBox { margin-top: 15px; padding: 10px; background: #1e293b; color: #10b981; border-radius: 6px; height: 130px; overflow-y: auto; font-size: 12px; font-family: monospace; line-height: 1.5;}
+  </style>
+</head>
+<body>
+  <h3>🤖 Web Agent</h3>
+  
+  <textarea id="taskInput" placeholder="输入指令，例如：收集考研信息"></textarea>
+  
+  <div class="hint-box">
+    💡 <b>映射提示：</b>输入指令时使用 <code>{{字段标识}}</code>，系统将自动读取知识库。例如：输入 <i>{{name}}</i>
+  </div>
+
+  <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+    <button id="startBtn" class="btn-start" style="flex: 1;">▶ 开始</button>
+    <button id="stopBtn" class="btn-stop" style="flex: 1;">🛑 停止</button>
+  </div>
+  
+  <button id="optionsBtn" class="btn-options">⚙️ 去配置 API 和知识库</button>
+
+  <div id="logBox">> 系统就绪...<br></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Agent 全局设置</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 30px; max-width: 700px; margin: 0 auto; background: #f0f2f5; }
+    .card { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 25px; }
+    h2 { color: #1f2937; margin-top: 0; display: flex; align-items: center; gap: 8px; font-size: 20px;}
+    label { font-weight: 600; display: block; margin-bottom: 10px; font-size: 14px; color: #4b5563; }
+    input[type="password"], input[type="text"] { width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; box-sizing: border-box; }
+    
+    /* 知识库表格样式 */
+    .toolbar { display: flex; justify-content: space-between; margin-bottom: 15px; }
+    .search-box { width: 60%; }
+    .btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: all 0.2s;}
+    .btn-primary { background: #3b82f6; color: white; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-secondary { background: #e5e7eb; color: #374151; }
+    .btn-secondary:hover { background: #d1d5db; }
+    .btn-danger { background: #fee2e2; color: #dc2626; padding: 8px 12px; }
+    .btn-danger:hover { background: #fca5a5; }
+
+    .kv-row { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; }
+    .kv-row input { flex: 1; margin: 0; }
+    
+    .save-bar { display: flex; align-items: center; gap: 15px; margin-top: 20px; }
+    #status { color: #10b981; font-weight: bold; }
+    
+    /* 隐藏底层的 JSON */
+    #hiddenJson { display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>🔒 核心凭证配置</h2>
+    <label>API Key (大模型鉴权凭证)</label>
+    <input type="password" id="apiKey" placeholder="sk-xxxxxxxxxxxxxxxxxxx">
+  </div>
+
+  <div class="card">
+    <h2>🧠 本地知识库 (Semantic Memory)</h2>
+    <label>添加你的专属字段映射，Agent 将在填表和搜索时自动读取。</label>
+    
+    <div class="toolbar">
+      <input type="text" id="searchInput" class="search-box" placeholder="🔍 搜索字段名或内容...">
+      <div style="display: flex; gap: 10px;">
+        <button id="sortBtn" class="btn btn-secondary">⬇️ 按首字母排序</button>
+        <button id="addBtn" class="btn btn-primary">➕ 新增字段</button>
+      </div>
+    </div>
+
+    <div id="kbList"></div>
+  </div>
+
+  <div class="save-bar">
+    <button id="saveBtn" class="btn btn-primary" style="padding: 12px 24px; font-size: 16px;">💾 保存全部设置</button>
+    <span id="status"></span>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+import { runAgentLoop, stopAgent, isAgentRunning } from './agentController.js';
+import { sendLog, logHistory } from '../utils/logger.js';
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "START_AGENT") {
+    if (isAgentRunning) {
+      sendLog("⚠️ 已有任务运行中，请勿重复点击开始。");
+      sendResponse({ status: "已有任务运行中" });
+      return false;
+    }
+    sendResponse({ status: "后台中枢已接管..." }); 
+    runAgentLoop(message.payload);
+    return false;
+  }
+  else if (message.type === "STOP_AGENT") {
+    stopAgent();
+    sendResponse({ status: "已发送停止信号" });
+    return false;
+  }
+  // ✅ 新增：处理前端面板拉取日志的请求
+  else if (message.type === "GET_LOGS") {
+    sendResponse({ logs: logHistory });
+    return false;
+  }
+});
