@@ -5,6 +5,34 @@ import { askVLM, askLLM } from '../services/llmClient.js';
 import { buildReActPrompt, buildSummaryPrompt } from './promptManager.js';
 
 export let isAgentRunning = false;
+let hitlResolver = null; 
+export let currentAgentStatus = "IDLE"; 
+
+export function broadcastStatus(statusString) {
+  currentAgentStatus = statusString;
+  try {
+    chrome.runtime.sendMessage({ type: "UPDATE_STATUS", status: statusString });
+  } catch (e) {}
+}
+
+export function resumeAgent() {
+  if (hitlResolver) {
+    hitlResolver(true);
+    hitlResolver = null;
+    sendLog("🟢 人工已放行，大脑重新上线...");
+    broadcastStatus("RUNNING"); 
+  }
+}
+
+export function abortAgentFromHITL() {
+  if (hitlResolver) {
+    hitlResolver(false);
+    hitlResolver = null;
+    sendLog("🛑 用户已手动接管，Agent 退出当前任务。");
+    stopAgent();
+  }
+}
+
 export function stopAgent() {
   if (isAgentRunning) {
     isAgentRunning = false;
@@ -24,18 +52,14 @@ async function waitForPageLoad(tabId) {
   let retries = 0;
   while (retries < 20 && isAgentRunning) { 
     try {
-      // 尝试获取标签页状态
       const tab = await chrome.tabs.get(tabId);
       if (tab.status === 'complete') {
-        await smartSleep(1500); // 增加对 Vue/React 等框架的动画缓冲时间
+        await smartSleep(1500); 
         return;
       }
     } catch (e) {
-      // 🌟 核心修复：如果旧标签页已销毁（比如点击弹出了新标签页，旧页被关），
-      // 或者是发生了极端的跨域导致旧 ID 失效。
-      // 绝对不要崩溃！直接退出等待，主循环会自动抓取最新的 activeTab！
       console.warn("等待过程中标签页已转移或销毁，停止死等。");
-      await smartSleep(1000); // 稍作缓冲让新标签页弹出来
+      await smartSleep(1000); 
       return; 
     }
     await smartSleep(500);
@@ -45,6 +69,7 @@ async function waitForPageLoad(tabId) {
 
 export async function runAgentLoop(userTask) {
   isAgentRunning = true; 
+  broadcastStatus("RUNNING"); 
   clearLogs(); 
   let collectedData = "";
   let visitedUrls = []; 
@@ -60,7 +85,7 @@ export async function runAgentLoop(userTask) {
 
     let isTaskComplete = false;
     let stepCount = 0;
-    const MAX_STEPS = 15; 
+    const MAX_STEPS = 30; 
     let currentPlan = "['分析页面布局制定计划']";
 
     sendLog("🤖 启动 VLM 视觉感知循环...");
@@ -68,10 +93,6 @@ export async function runAgentLoop(userTask) {
     while (!isTaskComplete && stepCount < MAX_STEPS && isAgentRunning) {
       stepCount++;
       
-      // ==========================================
-      // 🚀 核心修复 1：每一轮动态追踪最新 Tab！
-      // 哪怕中途打开了新标签页，Agent 也能死死咬住目标！
-      // ==========================================
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       const activeTab = tabs[0];
       if (!activeTab || activeTab.url.startsWith("chrome://")) {
@@ -82,7 +103,6 @@ export async function runAgentLoop(userTask) {
 
       sendLog(`\n🔄 [第 ${stepCount} 轮] 正在观察屏幕...`);
 
-      // 🚀 核心修复 2：安全捕获截图 (防止弹窗关闭导致焦点丢失时崩溃)
       let screenshotBase64;
       try {
           screenshotBase64 = await chrome.tabs.captureVisibleTab(activeTab.windowId, { format: 'jpeg', quality: 40 });
@@ -92,16 +112,12 @@ export async function runAgentLoop(userTask) {
           continue;
       }
       
-      // ==========================================
-      // 🚀 核心修复 3：SPA 框架渲染深度等待机制
-      // 不再盲目相信浏览器的 Complete 状态，必须拿到有效 DOM 才算数！
-      // ==========================================
       let domInfo = [];
       let retryCount = 0;
       while (retryCount < 4 && isAgentRunning) {
           try {
               domInfo = await chrome.tabs.sendMessage(activeTab.id, { type: "GET_DOM_INFO" });
-              if (domInfo && domInfo.length > 3) break; // 探测到有实际按钮才算渲染完成
+              if (domInfo && domInfo.length > 3) break; 
           } catch (e) {}
           await smartSleep(1000); 
           retryCount++;
@@ -109,7 +125,6 @@ export async function runAgentLoop(userTask) {
 
       if (!isAgentRunning) break;
 
-      // 生成极简列表发给大模型
       const simpleDomForLLM = domInfo.map(el => {
           let str = `[${el.id}] ${el.type}`;
           if (el.text) str += `: ${el.text}`;
@@ -131,7 +146,6 @@ export async function runAgentLoop(userTask) {
 
       if (!isAgentRunning) break;
 
-      // 物理级死循环熔断
       if (actionData.action === 'scroll') {
           consecutiveScrolls++;
           if (consecutiveScrolls >= 3) {
@@ -148,7 +162,6 @@ export async function runAgentLoop(userTask) {
           }
       } else { consecutiveExtracts = 0; }
 
-      // 坐标还原与记忆追踪
       if (['click', 'type'].includes(actionData.action) && actionData.element_id !== undefined) {
           const targetEl = domInfo.find(el => el.id === actionData.element_id);
           if (targetEl) {
@@ -167,10 +180,36 @@ export async function runAgentLoop(userTask) {
       sendLog(actionLog);
 
       // 动作分发
-      if (actionData.action === "done") {
-        isTaskComplete = true;
-        sendLog("✅ Agent 判定任务闭环！");
-        break;
+      if (actionData.action === "show_hitl") {
+        sendLog(`⚠️ 触发安全网关: ${actionData.message || "请求人工确认"}`);
+        try {
+            chrome.tabs.sendMessage(activeTab.id, { type: "EXECUTE_ACTION", action: actionData }).catch(()=>{});
+        } catch (e) {}
+
+        sendLog("⏸️ Agent 已挂起，等待用户操作...");
+        broadcastStatus("WAITING"); 
+        
+        const shouldContinue = await new Promise(resolve => { hitlResolver = resolve; });
+        if (!shouldContinue) break;
+      }
+      else if (actionData.action === "done") {
+        const thought = actionData.thought || "";
+        if (thought.includes("登录") || thought.includes("扫码") || thought.includes("挂起")) {
+            sendLog("🛡️ 引擎底层拦截：模型企图用 done 逃避登录墙，系统已强制修正为挂起状态！");
+            chrome.tabs.sendMessage(activeTab.id, { 
+                type: "EXECUTE_ACTION", 
+                action: { action: "show_hitl", message: "系统检测到登录墙，请在弹窗中点击恢复执行。" } 
+            }).catch(()=>{});
+            
+            sendLog("⏸️ Agent 已挂起，等待用户操作...");
+            broadcastStatus("WAITING"); 
+            const shouldContinue = await new Promise(resolve => { hitlResolver = resolve; });
+            if (!shouldContinue) break; 
+        } else {
+            isTaskComplete = true;
+            sendLog("✅ Agent 判定任务闭环！");
+            break;
+        }
       } 
       else if (actionData.action === "extract") {
         sendLog("📥 正在提取本页文字...");
@@ -215,6 +254,7 @@ export async function runAgentLoop(userTask) {
     sendLog(`❌ 发生致命错误: ${error.message}`);
   } finally {
     isAgentRunning = false; 
+    broadcastStatus("IDLE"); 
   }
 }
 

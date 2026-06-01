@@ -20,19 +20,30 @@ export function buildReActPrompt(parsedTask, kbData, currentPlan, collectedDataL
   7. ⚠️【严禁脑补 ID】：绝不允许理所当然地认为“第一个结果就是 ID:0”！网页的 ID:0 通常是左上角的Logo！必须逐行仔细阅读列表找到实际对应的 ID。
   8. ⚠️【防撞墙机制】：动作未生效必须换策略！发现回车无效，立刻换用 click 点击搜索按钮。严禁连续 3 次 scroll，严禁连续 2 次原地 extract！
   9. ⚠️【去重逻辑】：绝不跳转或点击已经存在于【已访问过的链接】中的网址！
+  10. 🛡️【安全与阻断策略（最高优先级）】：当你观察到屏幕被“扫码登录框”、“验证码”遮挡，或者你认为需要用户手动登录才能继续时，**绝对不允许输出 "action": "done" 来结束任务！** 你必须且只能输出 "action": "show_hitl" 来挂起任务，并在 message 字段中告诉用户需要扫码！
   
   你必须且只能返回严格的 JSON 格式：
   {
     "thought": "一句话描述你看到了什么，评估上一轮动作是否生效，比对列表确认真实的 ID，以及下一步要做什么",
     "remaining_plan": ["步骤A", "执行提交", "goto: 网址X"],
-    "action": "click | type | press_enter | scroll | extract | back | goto | done",
+    "action": "click | type | press_enter | scroll | extract | back | goto | show_hitl | done",
     "element_id": 12, 
     "text": "要输入的文字(仅type动作需要)",
     "submit_after_type": true,
-    "url": "要直接跳转的完整网址(仅goto动作需要)"
+    "url": "要直接跳转的完整网址(仅goto动作需要)",
+    "message": "给用户的警告提示语，例如'检测到登录墙，请主人扫码登录' (仅show_hitl动作需要)"
   }`;
 }
 
 export function buildSummaryPrompt(parsedTask, collectedData) {
-  return `原始任务：“${parsedTask}”。\n以下是收集到的网页文本，请整理成一份排版精美、结构清晰的 Markdown 报告：\n\n${collectedData}`;
+  return `你是一个顶级数据分析师。你的最终目标是根据用户的原始任务：“${parsedTask}”，从以下粗糙的网页抓取文本中提炼并结构化信息。
+  
+  【提取与排版规则（自适应适用）】：
+  1. 如果任务是收集求职/租房/酒店/竞品等具有对比性质的信息：请强制输出 Markdown 表格，并自动提取合理的核心维度（如：公司、岗位、薪资、地点、核心要求等）。
+  2. 如果任务是查阅教程、攻略、百科或新闻文章：请采用层级分明的 Markdown 列表与加粗标题进行精美排版，保留文章核心脉络和操作步骤。
+  3. 如果发现收集的文本中含有无关的噪音（如版权声明、侧边栏残余文字等），请直接剔除，不要写进报告。
+  4. 在内容的最后，请基于你收集到的信息，给用户提供一段简短的总结或建议（例如：哪个岗位最值得投，或者这篇教程的核心难点是什么）。
+
+  【收集到的网页数据如下】：
+  ${collectedData}`;
 }

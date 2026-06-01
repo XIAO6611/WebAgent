@@ -1,4 +1,4 @@
-import { runAgentLoop, stopAgent, isAgentRunning } from './agentController.js';
+import { runAgentLoop, stopAgent, isAgentRunning, resumeAgent, abortAgentFromHITL, currentAgentStatus } from './agentController.js';
 import { sendLog, logHistory } from '../utils/logger.js';
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -12,14 +12,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     runAgentLoop(message.payload);
     return false;
   }
+  // 处理前端弹窗的放行与接管请求
+  else if (message.type === "RESUME_AGENT") {
+    resumeAgent();
+    sendResponse({ status: "已放行" });
+    return false;
+  }
+  else if (message.type === "ABORT_AGENT") {
+    abortAgentFromHITL();
+    sendResponse({ status: "已接管" });
+    return false;
+  }
   else if (message.type === "STOP_AGENT") {
     stopAgent();
     sendResponse({ status: "已发送停止信号" });
     return false;
   }
-  // ✅ 新增：处理前端面板拉取日志的请求
+  // 向前端返回 currentAgentStatus 状态
   else if (message.type === "GET_LOGS") {
-    sendResponse({ logs: logHistory });
+    sendResponse({ logs: logHistory, status: currentAgentStatus });
     return false;
   }
 });

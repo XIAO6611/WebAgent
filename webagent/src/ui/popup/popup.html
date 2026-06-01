@@ -23,7 +23,12 @@
   </style>
 </head>
 <body>
-  <h3>🤖 Web Agent</h3>
+  <div style="display: flex; justify-content: space-between; align-items: center;">
+    <h3>🤖 Web Agent</h3>
+    <span id="statusBadge" style="padding: 4px 8px; border-radius: 4px; background: #e5e7eb; color: #374151; font-size: 12px; font-weight: bold;">
+      ⚫ 状态: 未启动
+    </span>
+  </div>
   
   <textarea id="taskInput" placeholder="输入指令，例如：收集考研信息"></textarea>
   
@@ -31,9 +36,15 @@
     💡 <b>映射提示：</b>输入指令时使用 <code>{{字段标识}}</code>，系统将自动读取知识库。例如：输入 <i>{{name}}</i>
   </div>
 
-  <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+<div style="display: flex; gap: 10px; margin-bottom: 10px;">
     <button id="startBtn" class="btn-start" style="flex: 1;">▶ 开始</button>
     <button id="stopBtn" class="btn-stop" style="flex: 1;">🛑 停止</button>
+  </div>
+  
+  <div id="hitlControls" style="display: none; flex-direction: column; gap: 8px; margin-bottom: 10px; padding: 10px; background: #fee2e2; border: 1px solid #fca5a5; border-radius: 6px;">
+    <div style="font-size: 12px; color: #dc2626; font-weight: bold; margin-bottom: 4px;">🚨 Agent 已挂起，等待人工协助</div>
+    <button id="popupResumeBtn" style="padding: 8px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px;">✅ 我已处理完毕，恢复执行</button>
+    <button id="popupAbortBtn" style="padding: 8px; background: #fff; color: #4b5563; border: 1px solid #d1d5db; border-radius: 4px; cursor: pointer; font-size: 13px;">🛑 终止任务，我自己来</button>
   </div>
   
   <button id="optionsBtn" class="btn-options">⚙️ 去配置 API 和知识库</button>
