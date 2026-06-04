@@ -1,14 +1,14 @@
 {
   "manifest_version": 3,
   "name": "多模态 Web Agent 助手",
-  "version": "1.0.1",
-  "description": "基于 VLM 和原生插件架构的网页智能交互助手",
+  "version": "1.1.0",
+  "description": "基于视觉模型和 Chrome 插件的网页智能交互助手",
   "permissions": [
     "activeTab",
     "scripting",
     "storage",
     "tabs",
-    "downloads" 
+    "downloads"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -20,7 +20,7 @@
     "default_popup": "popup.html",
     "default_title": "唤起 Agent"
   },
-  "options_page": "options.html", 
+  "options_page": "options.html",
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
