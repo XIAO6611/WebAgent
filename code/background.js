@@ -1,15 +1,35 @@
 let collectedData = "";
+let currentRunId = 0;
+let activeAbortController = null;
+
+chrome.action.onClicked.addListener(async (tab) => {
+  try {
+    validateRunnableTab(tab);
+    await sendTabMessage(tab.id, { type: "TOGGLE_AGENT_PANEL" });
+  } catch (error) {
+    sendLog(`无法打开悬浮面板: ${error.message}`);
+  }
+});
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "START_AGENT") {
+    stopActiveRun("收到新任务，已停止上一轮任务。", false);
+    currentRunId += 1;
+    const runId = currentRunId;
+    activeAbortController = new AbortController();
     collectedData = "";
     sendResponse({ status: "后台已接管，正在解析指令..." });
 
     if (isFormFillTask(message.payload || "")) {
-      runFormFillTask(message.payload || "");
+      runFormFillTask(message.payload || "", runId);
     } else {
-      runAgentLoop(message.payload || "");
+      runAgentLoop(message.payload || "", runId);
     }
+  }
+
+  if (message.type === "STOP_AGENT") {
+    stopActiveRun("已收到停止指令，正在中断当前任务。", true);
+    sendResponse({ status: "已发送停止指令。" });
   }
 
   if (message.type === "REMEMBER_FORM_INFO") {
@@ -62,19 +82,23 @@ function isFormFillTask(task) {
   return /填表|填写|表单|简历|投递|申请|application|apply|form|resume|cv/i.test(task);
 }
 
-async function runFormFillTask(userTask) {
+async function runFormFillTask(userTask, runId) {
   try {
     const activeTab = await getActiveTab();
     validateRunnableTab(activeTab);
+    throwIfStopped(runId);
 
     const storage = await chrome.storage.local.get(["apiKey", "knowledgeBase", "resumeText"]);
     if (!storage.apiKey) throw new Error("未配置 API Key，请先到选项页配置。");
+    throwIfStopped(runId);
 
     sendLog("开始表单填写模式：先扫描当前页面表单字段。");
     const blocker = await detectAndPauseForBlocker(activeTab.id);
     if (blocker.blocked) return;
+    throwIfStopped(runId);
 
     const formScan = await sendTabMessage(activeTab.id, { type: "SCAN_FORM_FIELDS" });
+    throwIfStopped(runId);
 
     if (!formScan || !Array.isArray(formScan.fields) || formScan.fields.length === 0) {
       throw new Error("当前页面没有发现可填写的表单字段。");
@@ -101,8 +125,10 @@ async function runFormFillTask(userTask) {
       userTask,
       formScan,
       profile,
-      screenshotBase64
+      screenshotBase64,
+      signal: activeAbortController.signal
     });
+    throwIfStopped(runId);
 
     const deterministicAssignments = buildDeterministicAssignments(formScan.fields, profile.knowledgeBase);
     const modelAssignments = normalizeAssignments(decision.assignments, formScan.fields, profile.knowledgeBase);
@@ -121,6 +147,7 @@ async function runFormFillTask(userTask) {
       type: "FILL_FORM_FIELDS",
       payload: assignments
     });
+    throwIfStopped(runId);
 
     const successCount = (fillResult.results || []).filter((item) => item.ok).length;
     sendLog(`已填写 ${successCount}/${assignments.length} 个字段。`);
@@ -136,11 +163,17 @@ async function runFormFillTask(userTask) {
       message: `Agent 已暂停在提交前。${missingText}请检查表单内容，确认无误后由你手动提交。${warningText}`
     });
   } catch (error) {
+    if (isStopError(error)) {
+      sendLog("任务已停止。");
+      return;
+    }
     sendLog(`发生错误: ${error.message}`);
+  } finally {
+    finishRun(runId);
   }
 }
 
-async function askFormFillDecision({ apiKey, userTask, formScan, profile, screenshotBase64 }) {
+async function askFormFillDecision({ apiKey, userTask, formScan, profile, screenshotBase64, signal }) {
   const fieldsForPrompt = formScan.fields.map((field) => ({
     selector: field.selector,
     tag: field.tag,
@@ -192,7 +225,7 @@ ${JSON.stringify(fieldsForPrompt, null, 2)}
 }`;
 
   sendLog("调用视觉模型生成填表映射。");
-  return askVisionJson(apiKey, prompt, screenshotBase64);
+  return askVisionJson(apiKey, prompt, screenshotBase64, signal);
 }
 
 const FIELD_ALIASES = {
@@ -464,13 +497,15 @@ function safeHost(url) {
   }
 }
 
-async function runAgentLoop(userTask) {
+async function runAgentLoop(userTask, runId) {
   try {
     const activeTab = await getActiveTab();
     validateRunnableTab(activeTab);
+    throwIfStopped(runId);
 
     const storage = await chrome.storage.local.get(["apiKey", "knowledgeBase"]);
     if (!storage.apiKey) throw new Error("未配置 API Key，请先到选项页配置。");
+    throwIfStopped(runId);
 
     let parsedTask = userTask;
     let kbData = {};
@@ -495,15 +530,17 @@ async function runAgentLoop(userTask) {
 
     sendLog("启动 VLM 视觉感知循环。");
 
-    while (!isTaskComplete && stepCount < MAX_STEPS) {
+    while (!isTaskComplete && stepCount < MAX_STEPS && !isRunStopped(runId)) {
       stepCount += 1;
       sendLog(`第 ${stepCount} 轮：正在观察当前屏幕。`);
 
       const blocker = await detectAndPauseForBlocker(activeTab.id);
       if (blocker.blocked) break;
+      throwIfStopped(runId);
 
       const screenshotBase64 = await chrome.tabs.captureVisibleTab(activeTab.windowId);
       const domInfo = await sendTabMessage(activeTab.id, { type: "GET_DOM_INFO" }).catch(() => []);
+      throwIfStopped(runId);
 
       const systemPrompt = `你是一个高级网页自动操作 Agent。当前是第 ${stepCount} 步。
 
@@ -535,7 +572,8 @@ async function runAgentLoop(userTask) {
 }`;
 
       sendLog("调用视觉模型思考中。");
-      const actionData = await askVisionJson(storage.apiKey, systemPrompt, screenshotBase64);
+      const actionData = await askVisionJson(storage.apiKey, systemPrompt, screenshotBase64, activeAbortController.signal);
+      throwIfStopped(runId);
       currentPlan = JSON.stringify(actionData.remaining_plan || []);
 
       sendLog(`思考: ${actionData.thought || ""}`);
@@ -560,6 +598,7 @@ async function runAgentLoop(userTask) {
       } else if (actionData.action === "extract") {
         sendLog("正在提取本页文字。");
         const pageText = await sendTabMessage(activeTab.id, { type: "GET_TEXT_CONTENT" });
+        throwIfStopped(runId);
         collectedData += `\n\n--- 第 ${stepCount} 步提取 ---\n${pageText}`;
         await sleep(1000);
       } else if (["scroll", "click", "type", "press_enter"].includes(actionData.action)) {
@@ -569,10 +608,16 @@ async function runAgentLoop(userTask) {
           await sleep(1000);
           continue;
         }
-        await sendTabMessage(activeTab.id, { type: "EXECUTE_ACTION", action: actionData });
+        await executePageAction(activeTab.id, actionData);
+        throwIfStopped(runId);
         sendLog("正在执行页面操作，等待网页响应。");
         await sleep(3500);
       }
+    }
+
+    if (isRunStopped(runId)) {
+      sendLog("任务已停止。");
+      return;
     }
 
     if (stepCount >= MAX_STEPS) {
@@ -582,20 +627,27 @@ async function runAgentLoop(userTask) {
     if (collectedData.length > 0) {
       sendLog("正在生成 Markdown 报告。");
       const summaryPrompt = `原始任务："${parsedTask}"\n以下是收集到的网页文本，请整理成结构清晰的 Markdown 报告：\n\n${collectedData}`;
-      const markdownData = await askText(summaryPrompt, storage.apiKey);
+      const markdownData = await askText(summaryPrompt, storage.apiKey, activeAbortController.signal);
       saveMarkdownFile(markdownData, "Agent_Report.md");
     } else {
       sendLog("收集箱为空，无数据可生成报告。");
     }
   } catch (error) {
+    if (isStopError(error)) {
+      sendLog("任务已停止。");
+      return;
+    }
     sendLog(`发生错误: ${error.message}`);
+  } finally {
+    finishRun(runId);
   }
 }
 
-async function askVisionJson(apiKey, prompt, screenshotBase64) {
+async function askVisionJson(apiKey, prompt, screenshotBase64, signal) {
   const response = await fetch("https://open.bigmodel.cn/api/paas/v4/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    signal,
     body: JSON.stringify({
       model: "glm-4.6v",
       messages: [
@@ -618,15 +670,24 @@ async function askVisionJson(apiKey, prompt, screenshotBase64) {
 
   const result = await response.json();
   const content = result.choices[0].message.content;
-  const jsonMatch = content.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("模型未返回有效 JSON。");
-  return JSON.parse(jsonMatch[0]);
+  try {
+    return parseModelJson(content);
+  } catch (error) {
+    sendLog("模型返回的 JSON 格式异常，正在自动修正后重试解析。");
+    const fixedContent = await askText(
+      `请把下面内容修正为严格 JSON。只返回 JSON，不要解释，不要 Markdown。\n\n${content}`,
+      apiKey,
+      signal
+    );
+    return parseModelJson(fixedContent);
+  }
 }
 
-async function askText(prompt, apiKey) {
+async function askText(prompt, apiKey, signal) {
   const response = await fetch("https://open.bigmodel.cn/api/paas/v4/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    signal,
     body: JSON.stringify({
       model: "glm-4.5-air",
       messages: [{ role: "user", content: prompt }],
@@ -640,11 +701,79 @@ async function askText(prompt, apiKey) {
   return result.choices[0].message.content;
 }
 
-async function askTextJson(prompt, apiKey) {
-  const content = await askText(prompt, apiKey);
-  const jsonMatch = content.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("模型未返回有效 JSON。");
-  return JSON.parse(jsonMatch[0]);
+async function askTextJson(prompt, apiKey, signal) {
+  const content = await askText(prompt, apiKey, signal);
+  return parseModelJson(content);
+}
+
+function parseModelJson(content) {
+  const jsonText = extractJsonObjectText(content);
+  if (!jsonText) throw new Error("模型未返回有效 JSON。");
+
+  const attempts = [
+    jsonText,
+    repairLooseJson(jsonText),
+    repairLooseJson(jsonText).replace(/,\s*([}\]])/g, "$1")
+  ];
+
+  let lastError = null;
+  for (const attempt of attempts) {
+    try {
+      return JSON.parse(attempt);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  const preview = jsonText.replace(/\s+/g, " ").slice(0, 240);
+  throw new Error(`模型返回的 JSON 格式仍无法解析: ${lastError.message}。片段: ${preview}`);
+}
+
+function extractJsonObjectText(content) {
+  const text = String(content || "")
+    .replace(/```(?:json)?/gi, "")
+    .replace(/```/g, "")
+    .trim();
+
+  const start = text.indexOf("{");
+  if (start < 0) return "";
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") inString = true;
+    else if (char === "{") depth += 1;
+    else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, index + 1);
+    }
+  }
+
+  return text.slice(start);
+}
+
+function repairLooseJson(jsonText) {
+  return String(jsonText)
+    .replace(/[\u201c\u201d]/g, "\"")
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/\uFF0C\s*(?="[^"]+"\s*:)/g, ",")
+    .replace(/\uFF1A\s*(?=(?:"|\[|\{|-?\d|true|false|null))/g, ":")
+    .replace(/(["\]\}0-9])\s*\n\s*(?="[^"]+"\s*:)/g, "$1,\n")
+    .replace(/(["\]\}0-9])\s+(?="[^"]+"\s*:)/g, "$1, ")
+    .replace(/,\s*([}\]])/g, "$1");
 }
 
 function enrichActionTarget(actionData, domInfo) {
@@ -702,6 +831,148 @@ async function detectAndPauseForBlocker(tabId) {
   }).catch(() => {});
   sendLog(message);
   return { blocked: true, reason: message };
+}
+
+async function executePageAction(tabId, action) {
+  const actionType = action.action || action.type;
+
+  if (actionType === "click" && hasFinitePoint(action)) {
+    try {
+      await dispatchTrustedMouseClick(tabId, Number(action.x), Number(action.y));
+      sendLog("已通过浏览器真实输入事件点击目标。");
+      return;
+    } catch (error) {
+      sendLog(`真实点击失败，改用页面脚本点击: ${error.message}`);
+    }
+  }
+
+  if (actionType === "press_enter") {
+    try {
+      await dispatchTrustedEnter(tabId);
+      sendLog("已通过浏览器真实输入事件按下 Enter。");
+      return;
+    } catch (error) {
+      sendLog(`真实 Enter 失败，改用页面脚本按键: ${error.message}`);
+    }
+  }
+
+  if (actionType === "scroll") {
+    try {
+      await dispatchTrustedScroll(tabId, Number.isFinite(Number(action.y)) ? Number(action.y) : 700);
+      sendLog("已通过浏览器真实输入事件滚动页面。");
+      return;
+    } catch (error) {
+      sendLog(`真实滚动失败，改用页面脚本滚动: ${error.message}`);
+    }
+  }
+
+  await sendTabMessage(tabId, { type: "EXECUTE_ACTION", action });
+}
+
+async function dispatchTrustedMouseClick(tabId, x, y) {
+  await withDebugger(tabId, async () => {
+    await sendDebuggerCommand(tabId, "Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x,
+      y,
+      button: "none",
+      clickCount: 0
+    });
+    await sleep(80);
+    await sendDebuggerCommand(tabId, "Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x,
+      y,
+      button: "left",
+      buttons: 1,
+      clickCount: 1
+    });
+    await sleep(80);
+    await sendDebuggerCommand(tabId, "Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x,
+      y,
+      button: "left",
+      buttons: 0,
+      clickCount: 1
+    });
+  });
+}
+
+async function dispatchTrustedEnter(tabId) {
+  await withDebugger(tabId, async () => {
+    await sendDebuggerCommand(tabId, "Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: "Enter",
+      code: "Enter",
+      windowsVirtualKeyCode: 13,
+      nativeVirtualKeyCode: 13
+    });
+    await sendDebuggerCommand(tabId, "Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "Enter",
+      code: "Enter",
+      windowsVirtualKeyCode: 13,
+      nativeVirtualKeyCode: 13
+    });
+  });
+}
+
+async function dispatchTrustedScroll(tabId, deltaY) {
+  await withDebugger(tabId, async () => {
+    await sendDebuggerCommand(tabId, "Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      x: 400,
+      y: 400,
+      deltaX: 0,
+      deltaY
+    });
+  });
+}
+
+async function withDebugger(tabId, task) {
+  const target = { tabId };
+  let attached = false;
+  try {
+    await attachDebugger(target);
+    attached = true;
+    await task();
+  } finally {
+    if (attached) {
+      await detachDebugger(target).catch(() => {});
+    }
+  }
+}
+
+function attachDebugger(target) {
+  return new Promise((resolve, reject) => {
+    chrome.debugger.attach(target, "1.3", () => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else resolve();
+    });
+  });
+}
+
+function detachDebugger(target) {
+  return new Promise((resolve, reject) => {
+    chrome.debugger.detach(target, () => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else resolve();
+    });
+  });
+}
+
+function sendDebuggerCommand(tabId, method, params) {
+  return new Promise((resolve, reject) => {
+    chrome.debugger.sendCommand({ tabId }, method, params, (result) => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else resolve(result);
+    });
+  });
+}
+
+function hasFinitePoint(action) {
+  return Number.isFinite(Number(action.x)) && Number.isFinite(Number(action.y));
 }
 
 async function getActiveTab() {
@@ -777,4 +1048,34 @@ function base64EncodeUnicode(text) {
 function sendLog(msg) {
   console.log(msg);
   chrome.runtime.sendMessage({ type: "UPDATE_LOG", payload: msg }).catch(() => {});
+  getActiveTab()
+    .then((tab) => {
+      if (tab && tab.id) chrome.tabs.sendMessage(tab.id, { type: "UPDATE_LOG", payload: msg }).catch(() => {});
+    })
+    .catch(() => {});
+}
+
+function stopActiveRun(message, shouldLog) {
+  currentRunId += 1;
+  if (activeAbortController) {
+    activeAbortController.abort();
+    activeAbortController = null;
+  }
+  if (shouldLog) sendLog(message);
+}
+
+function finishRun(runId) {
+  if (runId === currentRunId) activeAbortController = null;
+}
+
+function isRunStopped(runId) {
+  return runId !== currentRunId || !activeAbortController;
+}
+
+function throwIfStopped(runId) {
+  if (isRunStopped(runId)) throw new Error("AGENT_STOPPED");
+}
+
+function isStopError(error) {
+  return error && (error.message === "AGENT_STOPPED" || error.name === "AbortError");
 }

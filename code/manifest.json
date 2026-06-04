@@ -8,7 +8,8 @@
     "scripting",
     "storage",
     "tabs",
-    "downloads"
+    "downloads",
+    "debugger"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -17,7 +18,6 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_popup": "popup.html",
     "default_title": "唤起 Agent"
   },
   "options_page": "options.html",

@@ -1,4 +1,14 @@
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "TOGGLE_AGENT_PANEL") {
+    toggleAgentPanel();
+    sendResponse({ ok: true });
+  }
+
+  if (message.type === "UPDATE_LOG") {
+    addPanelLog(message.payload);
+    sendResponse({ ok: true });
+  }
+
   if (message.type === "EXECUTE_ACTION") {
     executeAction(message.action);
     sendResponse({ ok: true });
@@ -49,10 +59,7 @@ function executeAction(action) {
   if (actionType === "click") {
     const element = findActionElement(action);
     if (element) {
-      element.focus();
-      element.click();
-      element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-      element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+      dispatchRealisticClick(element, action);
     }
   } else if (actionType === "type") {
     const element = findActionElement(action) || getEditableActiveElement();
@@ -72,7 +79,8 @@ function executeAction(action) {
       document.activeElement.dispatchEvent(enterEvent);
     }
   } else if (actionType === "scroll") {
-    window.scrollBy({ top: window.innerHeight * 0.8, left: 0, behavior: "smooth" });
+    const amount = Number.isFinite(Number(action.y)) ? Number(action.y) : window.innerHeight * 0.8;
+    window.scrollBy({ top: amount, left: 0, behavior: "smooth" });
   } else if (actionType === "show_hitl") {
     showHITLModal(action.message);
   }
@@ -83,6 +91,7 @@ function extractInteractiveElements() {
   const query = document.querySelectorAll("input, textarea, button, a[href], select, [contenteditable='true'], [role='textbox'], [role='button']");
 
   query.forEach((el, index) => {
+    if (el.closest("#web-agent-panel-host, #agent-hitl-modal, #agent-form-review-modal, #agent-knowledge-update-modal")) return;
     const rect = el.getBoundingClientRect();
     if (rect.width > 0 && rect.height > 0 &&
         rect.top >= 0 && rect.top <= window.innerHeight &&
@@ -101,6 +110,40 @@ function extractInteractiveElements() {
     }
   });
   return elements;
+}
+
+function dispatchRealisticClick(element, action) {
+  const clickable = normalizeClickableOrEditableTarget(element, action) || element;
+  clickable.scrollIntoView({ block: "center", inline: "center", behavior: "auto" });
+  const rect = clickable.getBoundingClientRect();
+  const clientX = Number.isFinite(Number(action.x)) && action.x >= 0 && action.x <= window.innerWidth
+    ? Number(action.x)
+    : rect.left + rect.width / 2;
+  const clientY = Number.isFinite(Number(action.y)) && action.y >= 0 && action.y <= window.innerHeight
+    ? Number(action.y)
+    : rect.top + rect.height / 2;
+  clickable.focus({ preventScroll: true });
+
+  const eventInit = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    view: window,
+    clientX,
+    clientY,
+    button: 0,
+    buttons: 1
+  };
+
+  if (window.PointerEvent) {
+    clickable.dispatchEvent(new PointerEvent("pointerdown", { ...eventInit, pointerId: 1, pointerType: "mouse", isPrimary: true }));
+    clickable.dispatchEvent(new PointerEvent("pointerup", { ...eventInit, pointerId: 1, pointerType: "mouse", isPrimary: true, buttons: 0 }));
+  }
+  clickable.dispatchEvent(new MouseEvent("mousedown", eventInit));
+  clickable.dispatchEvent(new MouseEvent("mouseup", { ...eventInit, buttons: 0 }));
+  clickable.dispatchEvent(new MouseEvent("click", { ...eventInit, buttons: 0 }));
+
+  if (typeof clickable.click === "function") clickable.click();
 }
 
 function findActionElement(action) {
@@ -571,4 +614,249 @@ function showHITLModal(warningMessage) {
   document.body.appendChild(overlay);
 
   document.getElementById("hitl-cancel").addEventListener("click", () => overlay.remove());
+}
+
+function toggleAgentPanel() {
+  const oldHost = document.getElementById("web-agent-panel-host");
+  if (oldHost) {
+    oldHost.remove();
+    return;
+  }
+  showAgentPanel();
+}
+
+function showAgentPanel() {
+  if (document.getElementById("web-agent-panel-host")) return;
+
+  const host = document.createElement("div");
+  host.id = "web-agent-panel-host";
+  host.style.cssText = "position:fixed;right:24px;top:96px;z-index:2147483646;";
+  const shadow = host.attachShadow({ mode: "open" });
+
+  shadow.innerHTML = `
+    <style>
+      :host {
+        color-scheme: light;
+        font-family: Arial, "Microsoft YaHei", sans-serif;
+      }
+      .panel {
+        width: min(420px, calc(100vw - 32px));
+        max-height: min(720px, calc(100vh - 32px));
+        background: #fff;
+        color: #111827;
+        border: 1px solid #d7dce3;
+        border-radius: 8px;
+        box-shadow: 0 18px 48px rgba(15, 23, 42, 0.22);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .header {
+        height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 0 12px 0 16px;
+        border-bottom: 1px solid #e5e7eb;
+        cursor: move;
+        user-select: none;
+      }
+      .title {
+        font-size: 16px;
+        font-weight: 700;
+      }
+      .icon-btn {
+        width: 30px;
+        height: 30px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: #374151;
+        cursor: pointer;
+        font-size: 18px;
+        line-height: 1;
+      }
+      .icon-btn:hover {
+        background: #f3f4f6;
+      }
+      .body {
+        padding: 14px 16px 16px;
+        overflow: auto;
+      }
+      .hint {
+        font-size: 13px;
+        color: #4b5563;
+        line-height: 1.55;
+        margin: 0 0 10px;
+      }
+      textarea {
+        width: 100%;
+        height: 92px;
+        resize: vertical;
+        box-sizing: border-box;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        padding: 9px 10px;
+        color: #111827;
+        font-size: 14px;
+        line-height: 1.5;
+        outline: none;
+      }
+      textarea:focus {
+        border-color: #1677ff;
+        box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.14);
+      }
+      .actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .secondary-actions {
+        display: grid;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      button {
+        min-height: 40px;
+        border: 0;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 700;
+      }
+      .primary {
+        background: #1677ff;
+        color: #fff;
+      }
+      .primary:hover {
+        background: #4096ff;
+      }
+      .danger {
+        background: #dc2626;
+        color: #fff;
+      }
+      .danger:hover {
+        background: #ef4444;
+      }
+      .muted {
+        background: #f0f2f5;
+        color: #111827;
+      }
+      .muted:hover {
+        background: #e5e7eb;
+      }
+      .log {
+        height: 190px;
+        margin-top: 12px;
+        padding: 10px;
+        box-sizing: border-box;
+        overflow: auto;
+        background: #20242c;
+        color: #d0d5dd;
+        border-radius: 6px;
+        font: 12px/1.5 Consolas, "Courier New", monospace;
+      }
+      @media (max-width: 520px) {
+        .panel {
+          width: calc(100vw - 20px);
+        }
+        .actions {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+    <section class="panel" role="dialog" aria-label="Web Agent">
+      <div class="header" id="dragHandle">
+        <div class="title">Web Agent</div>
+        <button class="icon-btn" id="closeBtn" title="关闭" aria-label="关闭">×</button>
+      </div>
+      <div class="body">
+        <p class="hint">输入“帮我填写当前求职表单”会进入专门的填表模式，填完会停在提交前。</p>
+        <textarea id="taskInput" placeholder="例如：根据我的简历帮我填写当前公司的投递表单"></textarea>
+        <div class="actions">
+          <button id="startBtn" class="primary">开始执行</button>
+          <button id="stopBtn" class="danger">停止思考</button>
+        </div>
+        <div class="secondary-actions">
+          <button id="updateKnowledgeBtn" class="muted">更新知识库（当前表单）</button>
+          <button id="optionsBtn" class="muted">配置 API、知识库和简历</button>
+        </div>
+        <div id="agentLog" class="log">&gt; 系统就绪...<br></div>
+      </div>
+    </section>
+  `;
+
+  document.documentElement.appendChild(host);
+  wireAgentPanel(host, shadow);
+}
+
+function wireAgentPanel(host, shadow) {
+  const closeBtn = shadow.getElementById("closeBtn");
+  const startBtn = shadow.getElementById("startBtn");
+  const stopBtn = shadow.getElementById("stopBtn");
+  const optionsBtn = shadow.getElementById("optionsBtn");
+  const updateKnowledgeBtn = shadow.getElementById("updateKnowledgeBtn");
+  const taskInput = shadow.getElementById("taskInput");
+  const dragHandle = shadow.getElementById("dragHandle");
+
+  closeBtn.addEventListener("click", () => host.remove());
+  optionsBtn.addEventListener("click", () => chrome.runtime.openOptionsPage());
+  updateKnowledgeBtn.addEventListener("click", () => {
+    addPanelLog("正在分析当前表单与知识库差异...");
+    chrome.runtime.sendMessage({ type: "PROPOSE_KNOWLEDGE_UPDATES_FROM_ACTIVE_TAB" }, (response) => {
+      if (response && response.status) addPanelLog(response.status);
+    });
+  });
+  startBtn.addEventListener("click", () => {
+    const task = taskInput.value.trim();
+    if (!task) {
+      addPanelLog("请先输入任务指令。");
+      taskInput.focus();
+      return;
+    }
+    addPanelLog("启动任务...");
+    chrome.runtime.sendMessage({ type: "START_AGENT", payload: task }, (response) => {
+      if (response && response.status) addPanelLog(response.status);
+    });
+  });
+  stopBtn.addEventListener("click", () => {
+    chrome.runtime.sendMessage({ type: "STOP_AGENT" }, (response) => {
+      addPanelLog(response && response.status ? response.status : "已发送停止指令。");
+    });
+  });
+
+  let dragState = null;
+  dragHandle.addEventListener("pointerdown", (event) => {
+    if (event.target === closeBtn) return;
+    const rect = host.getBoundingClientRect();
+    dragState = {
+      startX: event.clientX,
+      startY: event.clientY,
+      left: rect.left,
+      top: rect.top
+    };
+    dragHandle.setPointerCapture(event.pointerId);
+  });
+  dragHandle.addEventListener("pointermove", (event) => {
+    if (!dragState) return;
+    const nextLeft = Math.max(8, Math.min(window.innerWidth - 80, dragState.left + event.clientX - dragState.startX));
+    const nextTop = Math.max(8, Math.min(window.innerHeight - 48, dragState.top + event.clientY - dragState.startY));
+    host.style.left = `${nextLeft}px`;
+    host.style.top = `${nextTop}px`;
+    host.style.right = "auto";
+  });
+  dragHandle.addEventListener("pointerup", () => {
+    dragState = null;
+  });
+}
+
+function addPanelLog(text) {
+  const host = document.getElementById("web-agent-panel-host");
+  if (!host || !host.shadowRoot) return;
+  const logBox = host.shadowRoot.getElementById("agentLog");
+  if (!logBox) return;
+  logBox.innerHTML += `&gt; ${escapeHtml(text)}<br>`;
+  logBox.scrollTop = logBox.scrollHeight;
 }
