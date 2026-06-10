@@ -403,11 +403,17 @@ function detectLoginPage() {
 
 function detectPageBlocker() {
   const text = `${document.title} ${document.body.innerText || ""}`.toLowerCase();
+  // const blockerWords = [
+  //   "登录", "登入", "注册", "手机号登录", "账号登录", "验证码", "短信验证",
+  //   "人机验证", "安全验证", "滑块验证", "captcha", "verify", "verification",
+  //   "login", "sign in", "sign up", "choose", "请选择", "确认选择"
+  // ];
   const blockerWords = [
-    "登录", "登入", "注册", "手机号登录", "账号登录", "验证码", "短信验证",
+    "验证码", "短信验证",
     "人机验证", "安全验证", "滑块验证", "captcha", "verify", "verification",
-    "login", "sign in", "sign up", "choose", "请选择", "确认选择"
+    "请选择", "确认选择"
   ];
+
 
   if (detectLoginPage()) {
     return {
@@ -425,26 +431,43 @@ function detectPageBlocker() {
     .join(" ")
     .toLowerCase();
 
+
+
+  // 仅对弹窗中的核心风控词进行硬拦截，普通的页面文案交给大模型判断
   const hasBlockingDialog = visibleDialogs.length > 0 &&
     blockerWords.some((word) => dialogText.includes(word));
+
   if (hasBlockingDialog) {
     return {
       blocked: true,
-      reason: "检测到登录、验证或需要用户选择的弹窗，Agent 已暂停，请用户处理后继续。"
-    };
-  }
-
-  const hasCaptcha = blockerWords.some((word) => text.includes(word)) &&
-    Boolean(document.querySelector("input[type='password'], input[name*='code'], input[placeholder*='验证码'], canvas, iframe"));
-  if (hasCaptcha) {
-    return {
-      blocked: true,
-      reason: "检测到验证码或安全验证，Agent 无法可靠自动处理，请用户手动完成。"
+      reason: "检测到安全验证或弹窗阻挡，请您处理后继续。"
     };
   }
 
   return { blocked: false, reason: "" };
 }
+
+
+//   const hasBlockingDialog = visibleDialogs.length > 0 &&
+//     blockerWords.some((word) => dialogText.includes(word));
+//   if (hasBlockingDialog) {
+//     return {
+//       blocked: true,
+//       reason: "检测到登录、验证或需要用户选择的弹窗，Agent 已暂停，请用户处理后继续。"
+//     };
+//   }
+
+//   const hasCaptcha = blockerWords.some((word) => text.includes(word)) &&
+//     Boolean(document.querySelector("input[type='password'], input[name*='code'], input[placeholder*='验证码'], canvas, iframe"));
+//   if (hasCaptcha) {
+//     return {
+//       blocked: true,
+//       reason: "检测到验证码或安全验证，Agent 无法可靠自动处理，请用户手动完成。"
+//     };
+//   }
+
+//   return { blocked: false, reason: "" };
+// }
 
 function findLabelText(el) {
   if (el.id) {
@@ -586,9 +609,38 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;");
 }
 
+// function showHITLModal(warningMessage) {
+//   if (document.getElementById("agent-hitl-modal")) return;
+//   console.log("[Web Agent] Agent 已暂停，等待用户处理。", warningMessage);
+
+//   const overlay = document.createElement("div");
+//   overlay.id = "agent-hitl-modal";
+//   overlay.style.cssText = `
+//     position: fixed; inset: 0; z-index: 2147483647; background: rgba(15,23,42,0.28);
+//     display: flex; align-items: center; justify-content: center; font-family: Arial, sans-serif;
+//   `;
+
+//   const modal = document.createElement("div");
+//   modal.style.cssText = `
+//     background: #fff; border: 2px solid #ff4d4f; border-radius: 8px;
+//     padding: 20px; box-shadow: 0 8px 28px rgba(0,0,0,0.18); width: min(480px, calc(100vw - 32px));
+//     font-family: sans-serif;
+//   `;
+//   modal.innerHTML = `
+//     <h3 style="margin-top:0; color: #ff4d4f; font-size: 16px;">Agent 拦截提示</h3>
+//     <p style="font-size: 14px; color: #333;">${escapeHtml(warningMessage || "")}</p>
+//     <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
+//       <button id="hitl-cancel" style="padding: 8px 16px; cursor: pointer;">我知道了</button>
+//     </div>
+//   `;
+//   overlay.appendChild(modal);
+//   document.body.appendChild(overlay);
+
+//   document.getElementById("hitl-cancel").addEventListener("click", () => overlay.remove());
+// }
+
 function showHITLModal(warningMessage) {
   if (document.getElementById("agent-hitl-modal")) return;
-  console.log("[Web Agent] Agent 已暂停，等待用户处理。", warningMessage);
 
   const overlay = document.createElement("div");
   overlay.id = "agent-hitl-modal";
@@ -604,16 +656,25 @@ function showHITLModal(warningMessage) {
     font-family: sans-serif;
   `;
   modal.innerHTML = `
-    <h3 style="margin-top:0; color: #ff4d4f; font-size: 16px;">Agent 拦截提示</h3>
+    <h3 style="margin-top:0; color: #ff4d4f; font-size: 16px;">🚨 Agent 拦截提示</h3>
     <p style="font-size: 14px; color: #333;">${escapeHtml(warningMessage || "")}</p>
-    <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
-      <button id="hitl-cancel" style="padding: 8px 16px; cursor: pointer;">我知道了</button>
+    <div style="display: flex; gap: 10px; margin-top: 20px;">
+      <button id="hitl-resume" style="flex: 1; padding: 8px; background: #1677ff; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">✅ 我已处理，恢复执行</button>
+      <button id="hitl-abort" style="flex: 1; padding: 8px; background: #f0f2f5; color: #333; border: 1px solid #d9d9d9; border-radius: 4px; cursor: pointer;">🛑 终止指令自己来</button>
     </div>
   `;
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
 
-  document.getElementById("hitl-cancel").addEventListener("click", () => overlay.remove());
+  // 绑定恢复与终止事件
+  document.getElementById("hitl-resume").addEventListener("click", () => {
+    overlay.remove();
+    chrome.runtime.sendMessage({ type: "RESUME_AGENT" });
+  });
+  document.getElementById("hitl-abort").addEventListener("click", () => {
+    overlay.remove();
+    chrome.runtime.sendMessage({ type: "ABORT_AGENT" });
+  });
 }
 
 function toggleAgentPanel() {
@@ -802,7 +863,11 @@ function wireAgentPanel(host, shadow) {
   const dragHandle = shadow.getElementById("dragHandle");
 
   closeBtn.addEventListener("click", () => host.remove());
-  optionsBtn.addEventListener("click", () => chrome.runtime.openOptionsPage());
+  
+  optionsBtn.addEventListener("click", () => {
+  // 发送消息委托后台去打开配置页
+  chrome.runtime.sendMessage({ type: "OPEN_OPTIONS_PAGE" });
+  });
   updateKnowledgeBtn.addEventListener("click", () => {
     addPanelLog("正在分析当前表单与知识库差异...");
     chrome.runtime.sendMessage({ type: "PROPOSE_KNOWLEDGE_UPDATES_FROM_ACTIVE_TAB" }, (response) => {

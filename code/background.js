@@ -1,6 +1,7 @@
 let collectedData = "";
 let currentRunId = 0;
 let activeAbortController = null;
+let hitlResolver = null; // ✅ 新增：用于挂起和恢复主循环的红绿灯
 
 chrome.action.onClicked.addListener(async (tab) => {
   try {
@@ -12,6 +13,32 @@ chrome.action.onClicked.addListener(async (tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // ✅ 新增：接收打开配置页的指令
+  if (message.type === "OPEN_OPTIONS_PAGE") {
+    chrome.runtime.openOptionsPage();
+    return false;
+  }
+
+  if (message.type === "RESUME_AGENT") {
+    if (hitlResolver) {
+      hitlResolver(true);
+      hitlResolver = null;
+      sendLog("🟢 用户已处理，恢复自动执行...");
+    }
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (message.type === "ABORT_AGENT") {
+    if (hitlResolver) {
+      hitlResolver(false);
+      hitlResolver = null;
+      stopActiveRun("🛑 用户手动终止了指令。", true);
+    }
+    sendResponse({ ok: true });
+    return true;
+  }
+  
   if (message.type === "START_AGENT") {
     stopActiveRun("收到新任务，已停止上一轮任务。", false);
     currentRunId += 1;
@@ -557,7 +584,7 @@ async function runAgentLoop(userTask, runId) {
 3. 如果需要输入内容，优先使用知识库中的数据。
 4. click/type 必须优先从交互元素列表中选择一个 target_id，并使用该元素的 selector/x/y。不要凭空编造坐标。
 5. 如果上一步已经点击并聚焦搜索框，下一步应该直接输出 type 并带上 text，不要重复 click。
-6. 如果遇到登录、验证码、隐私授权、地区/身份选择、无法判断的弹窗或必须由用户确认的内容，输出 action: "show_hitl"，并在 text 中说明需要用户处理什么。
+6. 如果遇到登录、验证码、隐私授权、地区/身份选择、无法判断的弹窗或必须由用户确认的内容，输出 action: "show_hitl"，并在 text 中说明需要用户处理什么。如果只是页面角落有普通的“登录”按钮且不阻挡当前任务，请忽略！
 
 只能返回 JSON：
 {
@@ -593,8 +620,10 @@ async function runAgentLoop(userTask, runId) {
             message: actionData.text || "Agent 遇到需要用户处理的页面状态，已暂停。"
           }
         });
-        sendLog("遇到需要用户处理的页面状态，已暂停。");
-        break;
+        sendLog("⏸️ Agent 已挂起，等待用户操作...");
+        // 挂起等待前端信号
+        const shouldContinue = await new Promise(resolve => { hitlResolver = resolve; });
+        if (!shouldContinue) break;
       } else if (actionData.action === "extract") {
         sendLog("正在提取本页文字。");
         const pageText = await sendTabMessage(activeTab.id, { type: "GET_TEXT_CONTENT" });
@@ -817,20 +846,36 @@ function formatActionLog(actionData) {
   return `动作: [${actionData.action}]${details.length ? " " + details.join("；") : ""}`;
 }
 
+// async function detectAndPauseForBlocker(tabId) {
+//   const blocker = await sendTabMessage(tabId, { type: "DETECT_PAGE_BLOCKER" }).catch(() => ({ blocked: false }));
+//   if (!blocker || !blocker.blocked) return { blocked: false };
+
+//   const message = blocker.reason || "Agent 遇到需要用户处理的页面状态，已暂停。";
+//   await sendTabMessage(tabId, {
+//     type: "EXECUTE_ACTION",
+//     action: {
+//       action: "show_hitl",
+//       message
+//     }
+//   }).catch(() => {});
+//   sendLog(message);
+//   return { blocked: true, reason: message };
+// }
+
 async function detectAndPauseForBlocker(tabId) {
   const blocker = await sendTabMessage(tabId, { type: "DETECT_PAGE_BLOCKER" }).catch(() => ({ blocked: false }));
   if (!blocker || !blocker.blocked) return { blocked: false };
 
-  const message = blocker.reason || "Agent 遇到需要用户处理的页面状态，已暂停。";
+  const message = blocker.reason || "遇到需要用户处理的弹窗，已暂停。";
   await sendTabMessage(tabId, {
     type: "EXECUTE_ACTION",
-    action: {
-      action: "show_hitl",
-      message
-    }
+    action: { action: "show_hitl", message }
   }).catch(() => {});
-  sendLog(message);
-  return { blocked: true, reason: message };
+  sendLog(`⏸️ ${message}`);
+
+  // 死等用户点击前端的两个按钮之一
+  const shouldContinue = await new Promise(resolve => { hitlResolver = resolve; });
+  return { blocked: !shouldContinue }; // 用户点恢复则返回 false（不阻塞），循环继续
 }
 
 async function executePageAction(tabId, action) {

@@ -18,7 +18,8 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "唤起 Agent"
+    "default_title": "唤起 Agent",
+    "default_popup": "popup.html"
   },
   "options_page": "options.html",
   "content_scripts": [
