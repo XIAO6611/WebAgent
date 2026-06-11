@@ -1,6 +1,7 @@
 function executeAction(action) {
-  const actionType = action.action || action.type; 
-  const dpr = window.devicePixelRatio || 1; 
+  const actionType = action.action || action.type;
+  const dpr = window.devicePixelRatio || 1;
+  const selectorTarget = action.selector ? document.querySelector(action.selector) : null;
   
   let targetX = action.x !== undefined ? Math.round(action.x / dpr) : undefined;
   let targetY = action.y !== undefined ? Math.round(action.y / dpr) : undefined;
@@ -44,8 +45,8 @@ function executeAction(action) {
   // 🤖 物理动作执行 (拟人化升级)
   // ==========================================
   if (actionType === "click") {
-    let element = document.elementFromPoint(targetX, targetY); 
-    if (element) { 
+    let element = selectorTarget || document.elementFromPoint(targetX, targetY);
+    if (element) {
       // 1. 向上溯源：如果点到了内层文字，找到真正能点击的外层卡片容器
       let clickableTarget = element;
       let temp = element;
@@ -56,6 +57,12 @@ function executeAction(action) {
           break;
         }
         temp = temp.parentElement;
+      }
+
+      if (targetX === undefined || targetY === undefined) {
+        const rect = clickableTarget.getBoundingClientRect();
+        targetX = rect.left + rect.width / 2;
+        targetY = rect.top + rect.height / 2;
       }
 
       // 组装带有真实物理坐标的鼠标事件
@@ -77,8 +84,13 @@ function executeAction(action) {
     }
   } 
   else if (actionType === "type") {
-    const element = document.elementFromPoint(targetX, targetY); 
+    const element = selectorTarget || document.elementFromPoint(targetX, targetY);
     if (element) {
+      if (targetX === undefined || targetY === undefined) {
+        const rect = element.getBoundingClientRect();
+        targetX = rect.left + rect.width / 2;
+        targetY = rect.top + rect.height / 2;
+      }
       element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: targetX, clientY: targetY }));
       element.click(); 
       if (element.tagName === "INPUT" || element.tagName === "TEXTAREA") element.value = action.text;
@@ -114,4 +126,67 @@ function executeAction(action) {
   else if (actionType === "show_hitl") {
     if (typeof showHITLModal === 'function') showHITLModal(action.message);
   }
+}
+
+function fillFormFields(assignments) {
+  const results = [];
+
+  assignments.forEach((item) => {
+    if (!item || !item.selector || item.value === undefined || item.value === null) return;
+
+    const element = document.querySelector(item.selector);
+    if (!element) {
+      results.push({ selector: item.selector, ok: false, reason: "element_not_found" });
+      return;
+    }
+
+    const ok = writeElementValue(element, item.value);
+    results.push({
+      selector: item.selector,
+      label: typeof findLabelText === "function" ? findLabelText(element) : "",
+      value: typeof getControlValue === "function" ? getControlValue(element) : element.value,
+      ok
+    });
+  });
+
+  return { ok: true, results };
+}
+
+function writeElementValue(element, value) {
+  element.focus();
+
+  if (element.tagName === "SELECT") {
+    const normalized = String(value).trim().toLowerCase();
+    const option = Array.from(element.options).find((opt) => {
+      return opt.value.trim().toLowerCase() === normalized ||
+        opt.textContent.trim().toLowerCase() === normalized;
+    });
+    if (option) element.value = option.value;
+  } else if (element.type === "checkbox") {
+    element.checked = Boolean(value) && String(value).toLowerCase() !== "false";
+  } else if (element.type === "radio") {
+    const name = element.name || "";
+    const group = name
+      ? document.querySelectorAll(`input[type="radio"][name="${String(name).replace(/["\\]/g, "\\$&")}"]`)
+      : [element];
+    const normalized = String(value).trim().toLowerCase();
+    const matched = Array.from(group).find((radio) => {
+      const label = typeof findLabelText === "function" ? findLabelText(radio).toLowerCase() : "";
+      return radio.value.toLowerCase() === normalized || label.includes(normalized);
+    });
+    if (matched) matched.checked = true;
+    else element.checked = true;
+  } else if (element.isContentEditable) {
+    element.innerText = String(value);
+  } else {
+    const prototype = Object.getPrototypeOf(element);
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+    if (descriptor && descriptor.set) descriptor.set.call(element, String(value));
+    else element.value = String(value);
+  }
+
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+  element.dispatchEvent(new Event("change", { bubbles: true }));
+  element.blur();
+  return true;
 }

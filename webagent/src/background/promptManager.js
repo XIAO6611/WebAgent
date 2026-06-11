@@ -47,3 +47,142 @@ export function buildSummaryPrompt(parsedTask, collectedData) {
   【收集到的网页数据如下】：
   ${collectedData}`;
 }
+
+export function buildFormFillPrompt(userTask, formScan, profile) {
+  const fieldsForPrompt = formScan.fields.map((field) => ({
+    selector: field.selector,
+    tag: field.tag,
+    type: field.type,
+    label: field.label,
+    name: field.name,
+    placeholder: field.placeholder,
+    required: field.required,
+    options: field.options,
+    value: field.value
+  }));
+
+  return `你是一个求职网站表单填写 Agent。请根据用户任务、用户资料、页面截图和 DOM 字段列表，为当前网页表单生成安全的自动填写计划。
+
+用户任务：
+${userTask}
+
+用户资料，包含简历文本、已确认个人信息和历史记忆：
+${JSON.stringify(profile, null, 2)}
+
+当前网页：
+${formScan.title}
+${formScan.url}
+
+字段列表：
+${JSON.stringify(fieldsForPrompt, null, 2)}
+
+规则：
+1. 只填写能从用户资料中明确推断出的内容，不要编造。
+2. 不填写 password、验证码、短信码、一次性代码、文件上传字段。
+3. 不点击提交、保存、下一步、申请等按钮；填完必须交给用户检查。
+4. select/radio 字段只能填写 options 中存在或语义等价的选项。
+5. 返回的 selector 必须来自字段列表。
+6. 字段语义必须严格匹配：学校/院校/毕业院校只能填 school；期望岗位/职位/职业/应聘岗位只能填 expected_position 或明确的岗位名称。
+7. 如果 expected_position 不存在，不要用 school、major、company 等字段替代，应放入 missing_fields。
+
+只返回 JSON：
+{
+  "assignments": [
+    {
+      "selector": "字段列表中的 selector",
+      "value": "要填写的内容",
+      "reason": "为什么这样填"
+    }
+  ],
+  "missing_fields": ["资料不足无法填写的字段"],
+  "warnings": ["需要用户检查的风险点"]
+}`;
+}
+
+export function buildProfileExtractionPrompt(existing, task) {
+  return `${task}
+
+已有知识库：
+${JSON.stringify(existing, null, 2)}
+
+请输出一个扁平 JSON object，字段名使用英文 snake_case，值使用中文或原文。优先提取：
+name, gender, phone, email, school, major, education_level, graduation_year, expected_position, city, skills, experience_summary, project_summary。
+如果信息不存在，不要编造；如果已有知识库中已有更明确内容，可以保留。
+只返回 JSON object，不要 Markdown。`;
+}
+
+export function buildKnowledgeUpdatePrompt(knowledgeBase, payload) {
+  return `你是个人资料知识库维护助手。请观察当前表单截图，并结合页面脚本采集到的字段值，比较已有知识库，找出用户手动修改、AI 填错后被用户修正、或值得新增到知识库的信息。
+
+已有知识库：
+${JSON.stringify(knowledgeBase, null, 2)}
+
+当前表单采集值：
+${JSON.stringify(payload || {}, null, 2)}
+
+规则：
+1. 只建议保存稳定的个人信息，例如姓名、性别、电话、邮箱、学校、学历、专业、期望岗位、城市、技能等。
+2. 不要保存验证码、协议勾选、临时网页状态。
+3. 如果表单值明显是填错的，例如“期望职业岗位”填成学校名，不要建议写入知识库，应在 reason 说明风险。
+4. key 使用英文 snake_case。label 使用中文。
+
+只返回 JSON：
+{
+  "proposals": [
+    {
+      "key": "expected_position",
+      "label": "期望职业岗位",
+      "currentValue": "原知识库中的值，没有则为空字符串",
+      "newValue": "建议保存的新值",
+      "action": "add | update",
+      "reason": "为什么建议更新"
+    }
+  ]
+}`;
+}
+
+export function buildFormReviewPrompt(formScan, profile) {
+  const fieldsForPrompt = formScan.fields.map((field) => ({
+    selector: field.selector,
+    tag: field.tag,
+    type: field.type,
+    label: field.label,
+    name: field.name,
+    placeholder: field.placeholder,
+    required: field.required,
+    options: field.options,
+    value: field.value
+  }));
+
+  return `你是一个独立的表单质检 Agent。你没有上一轮填表 Agent 的记忆，只能根据当前页面截图、当前表单字段值和用户知识库判断是否填写正确。
+
+用户资料：
+${JSON.stringify(profile, null, 2)}
+
+当前网页：
+${formScan.title}
+${formScan.url}
+
+当前表单字段和值：
+${JSON.stringify(fieldsForPrompt, null, 2)}
+
+检查规则：
+1. 严格按字段语义检查，不能把学校、专业、公司名称填到期望职业岗位。
+2. “期望职业岗位/期望职位/应聘岗位/目标岗位”只能使用 expected_position 或明确岗位名称。
+3. 如果 expected_position 是“AI产品”“AI产品经理”“产品”等，不能把 school 的值用于该字段。
+4. 学校/毕业院校只能使用 school；专业只能使用 major；邮箱只能使用 email；手机号只能使用 phone。
+5. 只修正有明确证据的错误，不要补全资料不足的字段，不要点击提交。
+6. 返回的 selector 必须来自字段列表。
+
+只返回 JSON：
+{
+  "corrections": [
+    {
+      "selector": "字段列表中的 selector",
+      "value": "修正后的值",
+      "reason": "为什么当前值错误，以及为什么这样修正"
+    }
+  ],
+  "warnings": ["仍需用户人工检查的问题"]
+}`;
+}

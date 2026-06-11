@@ -4,58 +4,100 @@
   <meta charset="UTF-8">
   <title>Agent 全局设置</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 30px; max-width: 700px; margin: 0 auto; background: #f0f2f5; }
-    .card { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 25px; }
-    h2 { color: #1f2937; margin-top: 0; display: flex; align-items: center; gap: 8px; font-size: 20px;}
-    label { font-weight: 600; display: block; margin-bottom: 10px; font-size: 14px; color: #4b5563; }
-    input[type="password"], input[type="text"] { width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; box-sizing: border-box; }
-    
-    /* 知识库表格样式 */
-    .toolbar { display: flex; justify-content: space-between; margin-bottom: 15px; }
-    .search-box { width: 60%; }
-    .btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: all 0.2s;}
-    .btn-primary { background: #3b82f6; color: white; }
-    .btn-primary:hover { background: #2563eb; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 30px; max-width: 780px; margin: 0 auto; background: #f0f2f5; color: #111827; }
+    .card { background: white; padding: 24px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 22px; }
+    h2 { margin: 0 0 16px; font-size: 20px; }
+    label { font-weight: 600; display: block; margin-bottom: 8px; font-size: 14px; color: #374151; }
+    input[type="password"], input[type="text"], textarea { width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; box-sizing: border-box; font: inherit; }
+    textarea { min-height: 120px; resize: vertical; line-height: 1.5; }
+    .toolbar { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 15px; }
+    .search-box { flex: 1; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; min-height: 38px; padding: 8px 14px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.2s; box-sizing: border-box; }
+    .btn-primary { background: #2563eb; color: white; }
+    .btn-primary:hover { background: #1d4ed8; }
     .btn-secondary { background: #e5e7eb; color: #374151; }
     .btn-secondary:hover { background: #d1d5db; }
     .btn-danger { background: #fee2e2; color: #dc2626; padding: 8px 12px; }
-    .btn-danger:hover { background: #fca5a5; }
-
-    .kv-row { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; }
-    .kv-row input { flex: 1; margin: 0; }
-    
+    .btn-danger:hover { background: #fecaca; }
+    .kv-row { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(180px, 2fr) auto; gap: 10px; margin-bottom: 10px; align-items: center; }
     .save-bar { display: flex; align-items: center; gap: 15px; margin-top: 20px; }
-    #status { color: #10b981; font-weight: bold; }
-    
-    /* 隐藏底层的 JSON */
-    #hiddenJson { display: none; }
+    .status { color: #059669; font-weight: 700; }
+    .muted { color: #6b7280; font-size: 13px; line-height: 1.5; }
+    .import-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+    .import-item { display: grid; gap: 8px; align-content: start; }
+    .file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+    .file-name { min-height: 20px; color: #4b5563; font-size: 13px; word-break: break-all; }
+    .extract-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+    .loading-mask { position: fixed; inset: 0; z-index: 2147483647; display: none; align-items: center; justify-content: center; background: rgba(15,23,42,0.28); }
+    .loading-mask.active { display: flex; }
+    .loading-card { min-width: 280px; max-width: calc(100vw - 48px); background: white; border-radius: 8px; box-shadow: 0 18px 48px rgba(15,23,42,0.22); padding: 24px; text-align: center; }
+    .spinner { width: 34px; height: 34px; border: 4px solid #dbeafe; border-top-color: #2563eb; border-radius: 50%; margin: 0 auto 14px; animation: spin 0.8s linear infinite; }
+    .loading-title { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+    .loading-desc { color: #6b7280; font-size: 13px; line-height: 1.5; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (max-width: 640px) {
+      body { padding: 16px; }
+      .toolbar, .save-bar { flex-direction: column; align-items: stretch; }
+      .kv-row, .import-grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
   <div class="card">
-    <h2>🔒 核心凭证配置</h2>
-    <label>API Key (大模型鉴权凭证)</label>
+    <h2>核心凭证配置</h2>
+    <label for="apiKey">API Key</label>
     <input type="password" id="apiKey" placeholder="sk-xxxxxxxxxxxxxxxxxxx">
   </div>
 
   <div class="card">
-    <h2>🧠 本地知识库 (Semantic Memory)</h2>
-    <label>添加你的专属字段映射，Agent 将在填表和搜索时自动读取。</label>
-    
-    <div class="toolbar">
-      <input type="text" id="searchInput" class="search-box" placeholder="🔍 搜索字段名或内容...">
-      <div style="display: flex; gap: 10px;">
-        <button id="sortBtn" class="btn btn-secondary">⬇️ 按首字母排序</button>
-        <button id="addBtn" class="btn btn-primary">➕ 新增字段</button>
+    <h2>简历导入与解析</h2>
+    <label for="resumeText">简历文本</label>
+    <textarea id="resumeText" placeholder="可以直接粘贴简历文本，也可以上传 .md/.txt 文件自动读取。"></textarea>
+
+    <div class="import-grid">
+      <div class="import-item">
+        <input type="file" id="resumeFile" class="file-input" accept=".md,.txt,text/markdown,text/plain">
+        <label for="resumeFile" class="btn btn-secondary">选择简历文本文件</label>
+        <div id="resumeFileName" class="file-name">未选择文本文件</div>
+      </div>
+      <div class="import-item">
+        <input type="file" id="resumeImage" class="file-input" accept="image/*">
+        <label for="resumeImage" class="btn btn-secondary">选择图片上传解析</label>
+        <div id="resumeImageName" class="file-name">未选择图片</div>
       </div>
     </div>
 
+    <div class="extract-actions">
+      <button id="extractTextBtn" class="btn btn-secondary">从文本解析知识库</button>
+      <button id="extractImageBtn" class="btn btn-secondary">从图片解析知识库</button>
+    </div>
+    <p class="muted">解析结果会先合并到下方知识库列表，确认后点击“保存全部设置”。</p>
+  </div>
+
+  <div class="card">
+    <h2>本地知识库</h2>
+    <label>Agent 会在填表和普通任务中读取这些字段，也支持在任务中使用 {{name}} 这样的占位符。</label>
+    <div class="toolbar">
+      <input type="text" id="searchInput" class="search-box" placeholder="搜索字段名或内容...">
+      <div style="display: flex; gap: 10px;">
+        <button id="sortBtn" class="btn btn-secondary">按字段排序</button>
+        <button id="addBtn" class="btn btn-primary">新增字段</button>
+      </div>
+    </div>
     <div id="kbList"></div>
   </div>
 
   <div class="save-bar">
-    <button id="saveBtn" class="btn btn-primary" style="padding: 12px 24px; font-size: 16px;">💾 保存全部设置</button>
-    <span id="status"></span>
+    <button id="saveBtn" class="btn btn-primary" style="padding: 12px 24px; font-size: 16px;">保存全部设置</button>
+    <span id="status" class="status"></span>
+  </div>
+
+  <div id="loadingMask" class="loading-mask" role="status" aria-live="polite">
+    <div class="loading-card">
+      <div class="spinner"></div>
+      <div id="loadingTitle" class="loading-title">解析中</div>
+      <div id="loadingDesc" class="loading-desc">图片已成功上传，正在提取简历信息...</div>
+    </div>
   </div>
 
   <script src="options.js"></script>
