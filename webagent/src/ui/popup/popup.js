@@ -76,13 +76,21 @@ function updateUIStatus(status) {
     startBtn.textContent = "运行中...";
     hitlControls.style.display = "none";
   } else if (status === "WAITING") {
-    badge.textContent = "状态：等待人工接管";
+    badge.textContent = "状态：安全拦截";
     badge.style.background = "#fef08a";
     badge.style.color = "#854d0e";
     startBtn.disabled = true;
     startBtn.style.opacity = "0.5";
     startBtn.textContent = "已挂起";
-    hitlControls.style.display = "flex";
+    hitlControls.style.display = "flex"; // 🚨 只有遇到真实的安全/登录拦截，才显示红色控制面板
+  } else if (status === "FORM_REVIEW") {
+    badge.textContent = "状态：页面核对中";
+    badge.style.background = "#e0f2fe";
+    badge.style.color = "#0369a1";
+    startBtn.disabled = true;
+    startBtn.style.opacity = "0.5";
+    startBtn.textContent = "填表暂停";
+    hitlControls.style.display = "none"; // 🚨 填表确认时，隐藏插件内部的红框，把舞台留给网页右下角的白框
   } else {
     badge.textContent = "状态：空闲";
     badge.style.background = "#e5e7eb";

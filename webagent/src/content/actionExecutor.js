@@ -124,7 +124,8 @@ function executeAction(action) {
     window.history.back();
   }
   else if (actionType === "show_hitl") {
-    if (typeof showHITLModal === 'function') showHITLModal(action.message);
+    // 🚨 将原本只传 action.message 改为传入整个 action 对象
+    if (typeof showHITLModal === 'function') showHITLModal(action);
   }
 }
 

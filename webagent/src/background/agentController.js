@@ -34,10 +34,11 @@ export function resumeAgent() {
 
 export function abortAgentFromHITL() {
   if (hitlResolver) {
-    hitlResolver(false);
+    hitlResolver(false); // 传入 false 打破死循环
     hitlResolver = null;
-    sendLog("🛑 用户已手动接管，Agent 退出当前任务。");
-    stopAgent();
+    isAgentRunning = false;
+    sendLog("🛑 用户已终止挂起任务，系统释放接管权...");
+    broadcastStatus("IDLE"); 
   }
 }
 
@@ -45,6 +46,13 @@ export function stopAgent() {
   if (isAgentRunning) {
     isAgentRunning = false;
     sendLog("🛑 收到中止指令，正在紧急刹车...");
+    // 强制打破死等锁
+    if (hitlResolver) {
+      hitlResolver(false);
+      hitlResolver = null;
+    }
+    // 强制立即刷新前端 UI
+    broadcastStatus("IDLE"); 
   }
 }
 
@@ -191,7 +199,8 @@ export async function runAgentLoop(userTask) {
       if (actionData.action === "show_hitl") {
         sendLog(`⚠️ 触发安全网关: ${actionData.message || "请求人工确认"}`);
         try {
-            chrome.tabs.sendMessage(activeTab.id, { type: "EXECUTE_ACTION", action: actionData }).catch(()=>{});
+            // 加上 hitl_type: 'security'
+            chrome.tabs.sendMessage(activeTab.id, { type: "EXECUTE_ACTION", action: { ...actionData, hitl_type: "security" } }).catch(()=>{});
         } catch (e) {}
 
         sendLog("⏸️ Agent 已挂起，等待用户操作...");
@@ -276,16 +285,17 @@ export async function runAgentLoop(userTask) {
                   
                   if (missingStr) sendLog(`🔍 发现缺漏: ${missingStr}`);
                   
-                  // 强制挂起让用户确认 (同样修复为 sendTabMessage)
+                  // 强制挂起让用户确认
                   sendTabMessage(activeTab.id, { 
                       type: "EXECUTE_ACTION", 
-                      action: { action: "show_hitl", message: hitlMessage } 
+                      // 确保包含了 hitl_type: "form_review"
+                      action: { action: "show_hitl", message: hitlMessage, hitl_type: "form_review" } 
                   }).catch(()=>{});
                   
-                  broadcastStatus("WAITING"); 
+                  // 🚨 将原本的 WAITING 改为专属的 FORM_REVIEW 状态，防止触发插件内的红色报警框
+                  broadcastStatus("FORM_REVIEW"); 
                   const userAction = await new Promise(resolve => { hitlResolver = resolve; });
-                  if (userAction === false) break; 
-                  // 🚨 捕获重新填写的指令
+                  if (userAction === false) break;
                   if (userAction === "REFILL") {
                       forceRefill = true;
                       continue; // 跳回循环开头，无视过滤条件重填！
@@ -305,7 +315,8 @@ export async function runAgentLoop(userTask) {
             sendLog("🛡️ 引擎底层拦截：模型企图用 done 逃避登录墙，系统已强制修正为挂起状态！");
             chrome.tabs.sendMessage(activeTab.id, { 
                 type: "EXECUTE_ACTION", 
-                action: { action: "show_hitl", message: "系统检测到登录墙，请在弹窗中点击恢复执行。" } 
+                // 加上 hitl_type: 'security'
+                action: { action: "show_hitl", message: "系统检测到登录墙，请在弹窗中点击恢复执行。", hitl_type: "security" } 
             }).catch(()=>{});
             
             sendLog("⏸️ Agent 已挂起，等待用户操作...");

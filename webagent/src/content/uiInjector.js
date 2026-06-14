@@ -1,48 +1,80 @@
-// 负责在真实网页上画出警告弹窗 (极简不遮挡版)
-function showHITLModal(warningMessage) {
-  if (document.getElementById('agent-hitl-modal')) return;
+// 负责在真实网页上画出警告弹窗 (现代极简白风格)
+function showHITLModal(action) {
+  // 🚨 强制移除旧弹窗，防止按钮事件绑定失灵
+  const oldModal = document.getElementById('agent-hitl-modal');
+  if (oldModal) oldModal.remove();
+
+  const message = typeof action === 'string' ? action : (action.message || "Agent 等待接管");
+  const hitlType = action.hitl_type || "security"; 
+  const isFormReview = hitlType === "form_review"; 
+
   const modal = document.createElement('div');
   modal.id = 'agent-hitl-modal';
   
-  // 🎨 UI 优化：放置在屏幕右下角，极简黑客风，半透明，绝不遮挡中央内容
+  // 🎨 现代简洁白 UI
   modal.style.cssText = `
-    position: fixed; bottom: 20px; right: 20px; z-index: 2147483647; 
-    background: rgba(30, 41, 59, 0.9); border-left: 4px solid #ef4444; border-radius: 8px;
-    padding: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 260px;
+    position: fixed; bottom: 24px; right: 24px; z-index: 2147483647; 
+    background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px;
+    padding: 20px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1); width: 320px;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    color: white; backdrop-filter: blur(8px);
+    color: #111827; transition: all 0.3s ease;
   `;
   
+  let buttonsHtml = '';
+  if (isFormReview) {
+      buttonsHtml = `
+        <button id="hitl-confirm" style="flex: 1; padding: 8px; background: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; transition: background 0.2s;">
+          放行提交
+        </button>
+        <button id="hitl-refill" style="flex: 1; padding: 8px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; transition: background 0.2s;">
+          重新填写
+        </button>
+        <button id="hitl-cancel" style="flex: 1; padding: 8px; background: #fee2e2; color: #dc2626; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; transition: background 0.2s;">
+          停止
+        </button>
+      `;
+  } else {
+      buttonsHtml = `
+        <button id="hitl-confirm" style="flex: 1; padding: 8px; background: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;">
+          我已处理，继续
+        </button>
+        <button id="hitl-cancel" style="flex: 1; padding: 8px; background: #fee2e2; color: #dc2626; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;">
+          停止任务
+        </button>
+      `;
+  }
+
   modal.innerHTML = `
-    <div style="font-size: 14px; font-weight: bold; margin-bottom: 8px; display: flex; align-items: center; gap: 5px;">
-      <span>🚨</span> Agent 等待接管
+    <div style="font-size: 15px; font-weight: 700; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; color: #111827;">
+      <span style="font-size: 18px;">${isFormReview ? '📝' : '🚨'}</span> 
+      ${isFormReview ? '表单填报进度' : '安全拦截'}
     </div>
-    <div style="font-size: 12px; color: #cbd5e1; margin-bottom: 15px; line-height: 1.4;">
-      ${warningMessage}
+    <div style="font-size: 13px; color: #4b5563; margin-bottom: 20px; line-height: 1.6; max-height: 220px; overflow-y: auto;">
+      ${message.replace(/\n/g, '<br>')}
     </div>
-    <div style="display: flex; gap: 8px;">
-      <button id="hitl-confirm" style="flex: 1; padding: 6px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold;">
-        ✅ 放行提交
-      </button>
-      <button id="hitl-refill" style="flex: 1; padding: 6px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold;">
-        🔄 重新填写
-      </button>
-      <button id="hitl-cancel" style="flex: 1; padding: 6px; background: transparent; color: #f87171; border: 1px solid #f87171; border-radius: 4px; cursor: pointer; font-size: 12px;">
-        🛑 中止任务
-      </button>
+    <div style="display: flex; gap: 10px;">
+      ${buttonsHtml}
     </div>
   `;
   document.body.appendChild(modal);
 
-  document.getElementById('hitl-refill').addEventListener('click', () => {
+  // === 事件绑定 ===
+  document.getElementById('hitl-cancel').addEventListener('click', () => {
     modal.remove();
-    chrome.runtime.sendMessage({ type: "REFILL_AGENT" });
+    chrome.runtime.sendMessage({ type: "ABORT_AGENT" });
   });
 
   document.getElementById('hitl-confirm').addEventListener('click', () => {
     modal.remove();
     chrome.runtime.sendMessage({ type: "RESUME_AGENT" });
   });
+
+  if (document.getElementById('hitl-refill')) {
+      document.getElementById('hitl-refill').addEventListener('click', () => {
+        modal.remove();
+        chrome.runtime.sendMessage({ type: "REFILL_AGENT" });
+      });
+  }
 }
 
 function showFormReviewModal(message) {
