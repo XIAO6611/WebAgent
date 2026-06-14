@@ -1,4 +1,8 @@
-export function buildReActPrompt(parsedTask, kbData, currentPlan, collectedDataLength, simpleDomForLLM, stepCount, visitedUrls) {
+export function buildReActPrompt(parsedTask, kbData, currentPlan, collectedDataLength, simpleDomForLLM, stepCount, visitedUrls, forceRefill = false) {
+  const refillRule = forceRefill ?
+    "11. 🪄【用户强制重新填表】：用户已点击“重新填写”！不要管表单是否填过，你必须立即输出 `\"action\": \"fill_form\"` 进行覆盖！" :
+    "11. 🪄【自动填表技能】：当你进入一个需要填写的表单页面时，输出 `\"action\": \"fill_form\"`。**⚠️绝对警告：如果观察截图发现表单的大部分输入框已经有值，绝对不允许再次输出 \`fill_form\` 陷入死循环！你应该去 click 提交按钮，或者输出 \`done\`。**";
+
   return `你是一个高级网页自动操作 Agent。当前是第 ${stepCount} 步。
   
   【总任务】: "${parsedTask}"
@@ -21,7 +25,8 @@ export function buildReActPrompt(parsedTask, kbData, currentPlan, collectedDataL
   8. ⚠️【防撞墙机制】：动作未生效必须换策略！发现回车无效，立刻换用 click 点击搜索按钮。严禁连续 3 次 scroll，严禁连续 2 次原地 extract！
   9. ⚠️【去重逻辑】：绝不跳转或点击已经存在于【已访问过的链接】中的网址！
   10. 🛡️【安全与阻断策略（最高优先级）】：当你观察到屏幕被“扫码登录框”、“验证码”遮挡，或者你认为需要用户手动登录才能继续时，**绝对不允许输出 "action": "done" 来结束任务！** 你必须且只能输出 "action": "show_hitl" 来挂起任务，并在 message 字段中告诉用户需要扫码！
-  
+  11. 🪄【自动填表技能】：当你进入了一个明确包含大量输入框的“求职申请”、“注册”、“信息登记”等表单页面时，不要使用低效的 \`type\` 动作逐个输入！你必须且只能输出 \`"action": "fill_form"\`，底层引擎会瞬间接管。
+
   你必须且只能返回严格的 JSON 格式：
   {
     "thought": "一句话描述你看到了什么，评估上一轮动作是否生效，比对列表确认真实的 ID，以及下一步要做什么",
@@ -51,51 +56,38 @@ export function buildSummaryPrompt(parsedTask, collectedData) {
 export function buildFormFillPrompt(userTask, formScan, profile) {
   const fieldsForPrompt = formScan.fields.map((field) => ({
     selector: field.selector,
-    tag: field.tag,
     type: field.type,
-    label: field.label,
-    name: field.name,
+    label: field.label,         
     placeholder: field.placeholder,
-    required: field.required,
-    options: field.options,
-    value: field.value
+    options: field.options,     
+    value: field.value // 让它看到当前是否已被选中
   }));
 
-  return `你是一个求职网站表单填写 Agent。请根据用户任务、用户资料、页面截图和 DOM 字段列表，为当前网页表单生成安全的自动填写计划。
+  return `你是一个专业的求职网站表单填写 Agent。
 
-用户任务：
-${userTask}
+用户任务：${userTask}
+用户资料：${JSON.stringify(profile, null, 2)}
+字段列表：${JSON.stringify(fieldsForPrompt, null, 2)}
 
-用户资料，包含简历文本、已确认个人信息和历史记忆：
-${JSON.stringify(profile, null, 2)}
-
-当前网页：
-${formScan.title}
-${formScan.url}
-
-字段列表：
-${JSON.stringify(fieldsForPrompt, null, 2)}
-
-规则：
-1. 只填写能从用户资料中明确推断出的内容，不要编造。
-2. 不填写 password、验证码、短信码、一次性代码、文件上传字段。
-3. 不点击提交、保存、下一步、申请等按钮；填完必须交给用户检查。
-4. select/radio 字段只能填写 options 中存在或语义等价的选项。
-5. 返回的 selector 必须来自字段列表。
-6. 字段语义必须严格匹配：学校/院校/毕业院校只能填 school；期望岗位/职位/职业/应聘岗位只能填 expected_position 或明确的岗位名称。
-7. 如果 expected_position 不存在，不要用 school、major、company 等字段替代，应放入 missing_fields。
+【最高优先级约束规则】：
+1. **宁缺毋滥**：只填写能从资料中明确推断出的内容。绝不能瞎编！没有数据的字段必须留空，并写入 missing_fields。
+2. **防错位机制**：仔细核对 label。如果字段是“父亲姓名”，绝不能填用户名字。如果 label 是“年龄”，绝不能填成手机号！
+3. **选项与单选/复选框处理**：
+   - 如果是下拉框 (select/custom_select) 且有 options，你填写的 \`value\` 必须绝对匹配 options 里的文字。
+   - 如果是单选框 (radio) 或复选框 (checkbox)，请直接选中代表正确选项的那个 \`selector\`，并将其 \`value\` 严格设置为 "true"。
+4. **⚠️原文绝对保留（防缩写）**：对于长文本字段（如项目经历、工作经验、自我评价、技能专长等），你必须**一字不差地完整复制**简历资料中的长文本！绝不允许擅自总结、精简或缩写！
 
 只返回 JSON：
 {
   "assignments": [
     {
-      "selector": "字段列表中的 selector",
-      "value": "要填写的内容",
-      "reason": "为什么这样填"
+      "selector": "对应的 selector",
+      "value": "要填写的内容 (对于radio/checkbox请直接填入字符串 \\"true\\")",
+      "reason": "简述匹配依据"
     }
   ],
-  "missing_fields": ["资料不足无法填写的字段"],
-  "warnings": ["需要用户检查的风险点"]
+  "missing_fields": ["缺失或资料不足无法填写的字段 label (如: 紧急联系人、照片)"],
+  "warnings": ["风险提示 (如: 某个单选题没有完美的对应项，或者由于选项限制可能填得不准确)"]
 }`;
 }
 

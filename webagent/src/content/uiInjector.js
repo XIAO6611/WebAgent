@@ -22,18 +22,21 @@ function showHITLModal(warningMessage) {
     </div>
     <div style="display: flex; gap: 8px;">
       <button id="hitl-confirm" style="flex: 1; padding: 6px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold;">
-        ✅ 放行
+        ✅ 放行提交
+      </button>
+      <button id="hitl-refill" style="flex: 1; padding: 6px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold;">
+        🔄 重新填写
       </button>
       <button id="hitl-cancel" style="flex: 1; padding: 6px; background: transparent; color: #f87171; border: 1px solid #f87171; border-radius: 4px; cursor: pointer; font-size: 12px;">
-        🛑 终止
+        🛑 中止任务
       </button>
     </div>
   `;
   document.body.appendChild(modal);
 
-  document.getElementById('hitl-cancel').addEventListener('click', () => {
+  document.getElementById('hitl-refill').addEventListener('click', () => {
     modal.remove();
-    chrome.runtime.sendMessage({ type: "ABORT_AGENT" });
+    chrome.runtime.sendMessage({ type: "REFILL_AGENT" });
   });
 
   document.getElementById('hitl-confirm').addEventListener('click', () => {

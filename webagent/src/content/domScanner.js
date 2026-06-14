@@ -47,8 +47,6 @@ function extractInteractiveElements() {
   return elements.slice(0, 50); 
 }
 
-// ✅ 核心优化：智能网页降噪器
-// ✅ 核心修复：无痕真实 DOM 降噪器
 function extractTextContent() {
   const noiseSelectors = [
     'script', 'style', 'noscript', 'nav', 'footer', 'header', 'aside',
@@ -86,27 +84,38 @@ function extractTextContent() {
 
 function scanFormFields() {
   const fields = [];
-  const controls = document.querySelectorAll(
-    "input:not([type='hidden']):not([type='submit']):not([type='button']):not([type='reset']), textarea, select"
-  );
+  // 增加对常见 UI 库 (Antd, Element) 自定义选择器和 ARIA 元素的扫描
+  const controls = document.querySelectorAll(`
+    input:not([type='hidden']):not([type='submit']):not([type='button']):not([type='reset']), 
+    textarea, 
+    select,
+    [role="combobox"], [role="radiogroup"], [role="listbox"],
+    .el-select, .ant-select
+  `);
 
   controls.forEach((el, index) => {
-    if (!isVisible(el) || el.disabled || el.readOnly) return;
+    if (!isVisible(el) || el.disabled || el.readOnly || (el.className && el.className.includes('disabled'))) return;
 
     const rect = el.getBoundingClientRect();
+    const tag = el.tagName.toLowerCase();
+    let type = (el.getAttribute("type") || tag).toLowerCase();
+    
+    // 处理伪装的 UI 组件
+    if (el.hasAttribute('role') || (el.className && el.className.includes('select'))) {
+      type = 'custom_select';
+    }
+
     fields.push({
       id: index,
       selector: buildStableSelector(el),
-      tag: el.tagName.toLowerCase(),
-      type: (el.getAttribute("type") || el.tagName).toLowerCase(),
+      tag: tag,
+      type: type,
+      // 故意降低隐式 name 和 id 的存在感，防止污染大模型
       name: el.getAttribute("name") || "",
-      idAttr: el.id || "",
       label: findLabelText(el),
-      placeholder: el.getAttribute("placeholder") || "",
-      ariaLabel: el.getAttribute("aria-label") || "",
+      placeholder: el.getAttribute("placeholder") || (tag !== 'input' ? el.innerText.trim().substring(0, 20) : ""),
       value: getControlValue(el),
-      required: Boolean(el.required || el.getAttribute("aria-required") === "true"),
-      options: getSelectOptions(el),
+      options: getSelectOptions(el), // 尝试提取选项
       x: Math.round(rect.x + rect.width / 2),
       y: Math.round(rect.y + rect.height / 2)
     });
@@ -116,8 +125,73 @@ function scanFormFields() {
     url: location.href,
     title: document.title,
     isLoginPage: detectLoginPage(),
-    fields
+    // 强制过滤掉那些既没有 Label 也没有 Placeholder 的“幽灵输入框”，防止乱填
+    fields: fields.filter(f => f.label || f.placeholder)
   };
+}
+
+function getSelectOptions(el) {
+  if (el.tagName === "SELECT") {
+    return Array.from(el.options).map((option) => ({ value: option.value, text: option.textContent.trim() }));
+  }
+  // 针对自定义组件，尝试寻找紧跟其后的下拉列表内容
+  const textContent = el.innerText || "";
+  if (textContent.includes('\n')) {
+      return textContent.split('\n').map(t => ({ value: t.trim(), text: t.trim() })).filter(t => t.text);
+  }
+  return [];
+}
+
+function findLabelText(el) {
+  // 1. 标准关联
+  if (el.id) {
+    const label = document.querySelector(`label[for="${attrEscape(el.id)}"]`);
+    if (label && label.innerText.trim()) return label.innerText.trim();
+  }
+  const parentLabel = el.closest("label");
+  if (parentLabel && parentLabel.innerText.trim()) return parentLabel.innerText.trim();
+
+  // 2. 🚨核心增强：针对问卷星/自定义 UI 框架的“容器溯源算法”
+  let node = el.parentElement;
+  let depth = 0;
+  while (node && depth < 5) {
+    const className = (node.className || "").toString().toLowerCase();
+    // 寻找具有“题目容器”特征的节点
+    if (className.includes('field') || className.includes('item') || className.includes('question') || className.includes('row')) {
+       const clone = node.cloneNode(true);
+       // 剔除内部输入框和选项的值，只保留干净的题目文本
+       clone.querySelectorAll('input, select, textarea, .el-select, [role="combobox"], [role="radio"]').forEach(n => n.remove());
+       const text = clone.innerText.trim();
+       if (text) {
+           const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+           if (lines.length > 0) return lines[0]; // 提取第一行作为完美题干
+       }
+    }
+    node = node.parentElement;
+    depth++;
+  }
+
+  // 3. 几何探测降级
+  const geometryLabel = findNearbyTextByGeometry(el);
+  if (geometryLabel) return geometryLabel;
+
+  return el.getAttribute("placeholder") || "";
+}
+
+
+function getSelectOptions(el) {
+  if (el.tagName === "SELECT") {
+    return Array.from(el.options).map((option) => ({
+      value: option.value,
+      text: option.textContent.trim()
+    }));
+  }
+  // 尝试寻找紧跟其后的下拉列表内容（针对自定义组件）
+  const textContent = el.innerText || "";
+  if (textContent.includes('\n')) {
+      return textContent.split('\n').map(t => ({ value: t.trim(), text: t.trim() })).filter(t => t.text);
+  }
+  return [];
 }
 
 function collectCurrentFormValues() {
@@ -187,37 +261,6 @@ function detectPageBlocker() {
   return { blocked: false, reason: "" };
 }
 
-function findLabelText(el) {
-  if (el.id) {
-    const label = document.querySelector(`label[for="${attrEscape(el.id)}"]`);
-    if (label && label.innerText.trim()) return label.innerText.trim();
-  }
-
-  const parentLabel = el.closest("label");
-  if (parentLabel && parentLabel.innerText.trim()) return parentLabel.innerText.trim();
-
-  const ariaLabelledBy = el.getAttribute("aria-labelledby");
-  if (ariaLabelledBy) {
-    const labelNode = document.getElementById(ariaLabelledBy);
-    if (labelNode && labelNode.innerText.trim()) return labelNode.innerText.trim();
-  }
-
-  const geometryLabel = findNearbyTextByGeometry(el);
-  if (geometryLabel) return geometryLabel;
-
-  const nearby = [];
-  let node = el.parentElement;
-  for (let depth = 0; node && depth < 3; depth += 1, node = node.parentElement) {
-    const text = Array.from(node.childNodes)
-      .filter((child) => child.nodeType === Node.TEXT_NODE || child.tagName === "LABEL")
-      .map((child) => child.textContent.trim())
-      .filter(Boolean)
-      .join(" ");
-    if (text) nearby.push(text);
-  }
-
-  return nearby[0] || el.getAttribute("placeholder") || el.getAttribute("name") || "";
-}
 
 function findNearbyTextByGeometry(el) {
   const rect = el.getBoundingClientRect();
@@ -265,20 +308,69 @@ function getControlValue(el) {
   return el.value || "";
 }
 
-function getSelectOptions(el) {
-  if (el.tagName !== "SELECT") return [];
-  return Array.from(el.options).map((option) => ({
-    value: option.value,
-    text: option.textContent.trim()
-  }));
-}
 
 function isVisible(el) {
   const rect = el.getBoundingClientRect();
   const style = window.getComputedStyle(el);
-  return rect.width > 0 && rect.height > 0 &&
-    style.visibility !== "hidden" &&
-    style.display !== "none";
+  if (rect.width === 0 || rect.height === 0 || style.visibility === "hidden" || style.display === "none" || style.opacity === "0") {
+    if (el.tagName === 'INPUT' && (el.type === 'radio' || el.type === 'checkbox')) {
+      const wrapper = el.closest('label') || el.parentElement;
+      if (wrapper) {
+         const wRect = wrapper.getBoundingClientRect();
+         const wStyle = window.getComputedStyle(wrapper);
+         return wRect.width > 0 && wRect.height > 0 && wStyle.visibility !== "hidden" && wStyle.display !== "none" && wStyle.opacity !== "0";
+      }
+    }
+    return false;
+  }
+  return true;
+}
+
+function findLabelText(el) {
+  let directLabel = "";
+  if (el.id) {
+    const label = document.querySelector(`label[for="${cssEscape(el.id)}"]`);
+    if (label && label.innerText.trim()) directLabel = label.innerText.trim();
+  }
+  if (!directLabel) {
+    const parentLabel = el.closest("label");
+    if (parentLabel) {
+      const clone = parentLabel.cloneNode(true);
+      clone.querySelectorAll('input').forEach(n => n.remove());
+      directLabel = clone.innerText.trim();
+    }
+  }
+
+  let containerLabel = "";
+  let node = el.parentElement;
+  let depth = 0;
+  // 向上溯源 5 层，寻找“题目”容器，完美抓取类似 "* 3. 性别" 这样的题干
+  while (node && depth < 5) {
+    const className = (node.className || "").toString().toLowerCase();
+    if (className.includes('field') || className.includes('item') || className.includes('question') || className.includes('row') || el.closest('[role="radiogroup"]')) {
+       const clone = node.cloneNode(true);
+       clone.querySelectorAll('input, select, textarea, .el-select, [role="combobox"], [role="radio"]').forEach(n => n.remove());
+       const text = clone.innerText.trim();
+       if (text) {
+           const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+           if (lines.length > 0) {
+               containerLabel = lines[0];
+               break;
+           }
+       }
+    }
+    node = node.parentElement;
+    depth++;
+  }
+
+  // 🚨 核心修复：如果是单选或多选，把【题干】和【选项】组合起来发给大模型！
+  // 比如发过去的是 "* 3. 性别 (选项: 男)"，这样大模型就绝对不会搞错了！
+  if (el.type === 'radio' || el.type === 'checkbox') {
+     const base = containerLabel || findNearbyTextByGeometry(el) || "";
+     return directLabel ? `${base} (选项: ${directLabel})` : base;
+  }
+
+  return containerLabel || directLabel || findNearbyTextByGeometry(el) || el.getAttribute("placeholder") || "";
 }
 
 function buildStableSelector(el) {

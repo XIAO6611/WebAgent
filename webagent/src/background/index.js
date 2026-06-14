@@ -3,12 +3,11 @@ import {
   extractProfileFromImage,
   extractProfileFromText,
   isAgentRunning,
-  isFormFillTask,
   proposeKnowledgeUpdatesFromActiveTab,
   resumeAgent,
+  refillAgent, // 确保有这个
   abortAgentFromHITL,
   runAgentLoop,
-  runFormFillTask,
   stopAgent,
   currentAgentStatus
 } from './agentController.js';
@@ -22,11 +21,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
     sendResponse({ status: "后台中枢已接管..." });
-    if (isFormFillTask(message.payload || "")) {
-      runFormFillTask(message.payload || "");
-    } else {
-      runAgentLoop(message.payload || "");
-    }
+    
+    // 不再区分任务类型，统一交给主循环自己决策
+    runAgentLoop(message.payload || "");
     return false;
   }
   // 处理前端弹窗的放行与接管请求
@@ -38,6 +35,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   else if (message.type === "ABORT_AGENT") {
     abortAgentFromHITL();
     sendResponse({ status: "已接管" });
+    return false;
+  }
+  else if (message.type === "REFILL_AGENT") {
+    refillAgent();
+    sendResponse({ status: "重新填写" });
     return false;
   }
   else if (message.type === "STOP_AGENT") {

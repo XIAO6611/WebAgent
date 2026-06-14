@@ -25,7 +25,7 @@ export function broadcastStatus(statusString) {
 
 export function resumeAgent() {
   if (hitlResolver) {
-    hitlResolver(true);
+    hitlResolver("RESUME");
     hitlResolver = null;
     sendLog("🟢 人工已放行，大脑重新上线...");
     broadcastStatus("RUNNING"); 
@@ -95,7 +95,7 @@ export async function runAgentLoop(userTask) {
     let stepCount = 0;
     const MAX_STEPS = 30; 
     let currentPlan = "['分析页面布局制定计划']";
-
+    let forceRefill = false;
     sendLog("🤖 启动 VLM 视觉感知循环...");
 
     while (!isTaskComplete && stepCount < MAX_STEPS && isAgentRunning) {
@@ -140,8 +140,8 @@ export async function runAgentLoop(userTask) {
           return str;
       });
 
-      const systemPrompt = buildReActPrompt(parsedTask, kbData, currentPlan, collectedData.length, simpleDomForLLM, stepCount, visitedUrls);
-      
+      const systemPrompt = buildReActPrompt(parsedTask, kbData, currentPlan, collectedData.length, simpleDomForLLM, stepCount, visitedUrls, forceRefill);
+
       sendLog("📡 呼叫大脑思考中 (限时80秒)...");
       let actionData;
       try {
@@ -199,6 +199,105 @@ export async function runAgentLoop(userTask) {
         
         const shouldContinue = await new Promise(resolve => { hitlResolver = resolve; });
         if (!shouldContinue) break;
+      }
+// 🚨 新增：融合批量填表宏动作，修复报错，并升级为【两阶段智能填表】
+      else if (actionData.action === "fill_form") {
+          sendLog("🪄 主大脑决定触发【批量填表】技能，正在接管页面...");
+          
+          try {
+              const { apiKey, kbData, resumeText } = await getKnowledgeBase();
+              const canonicalKbData = normalizeKnowledgeBase(kbData);
+              const profile = { knowledgeBase: canonicalKbData, resumeText };
+              
+              // 🚨 修复报错：必须使用 sendTabMessage 替代 chrome.tabs.sendMessage，支持断线自动注入
+              const formScan = await sendTabMessage(activeTab.id, { type: "SCAN_FORM_FIELDS" });
+              if (!formScan || !formScan.fields || formScan.fields.length === 0) {
+                  sendLog("⚠️ 未在页面上找到可填写的表单，大脑将重新评估。");
+                  await smartSleep(1000);
+                  continue; 
+              }
+
+              sendLog(`📊 扫描到 ${formScan.fields.length} 个可视字段，开始两阶段智能处理...`);
+              
+              // ================= 两阶段填表核心逻辑 =================
+              
+              // 【第一阶段】：本地规则秒级覆盖基础字段（姓名、电话、邮箱等确定性文本）
+              const deterministicAssignments = buildDeterministicAssignments(formScan.fields, canonicalKbData);
+              
+              // 计算出第一阶段未能搞定、需要大模型来判断的“复杂字段”（选项、未知问题、长文本等）
+              const resolvedSelectors = new Set(deterministicAssignments.map(a => a.selector));
+              const complexFields = formScan.fields.filter(f => !resolvedSelectors.has(f.selector) && (!f.value || forceRefill));
+
+              let modelAssignments = [];
+              let formDecision = {};
+
+              // 【第二阶段】：把剩下难啃的骨头交给大模型细致分析
+              if (complexFields.length > 0) {
+                  sendLog(`🧠 剩下 ${complexFields.length} 个复杂或选择类字段，正交给大模型细致分析...`);
+                  // 构造一个只包含复杂字段的精简表单交给大模型，极大降低幻觉率！
+                  const complexFormScan = { ...formScan, fields: complexFields };
+                  
+                  formDecision = await askVLM(apiKey, buildFormFillPrompt(userTask, complexFormScan, profile), screenshotBase64);
+                  modelAssignments = normalizeAssignments(formDecision.assignments || [], complexFields, canonicalKbData);
+              } else {
+                  sendLog("✅ 所有字段已通过本地规则完美匹配！");
+              }
+
+              // 合并两阶段的结果
+              const assignments = mergeAssignments(modelAssignments, deterministicAssignments);
+              
+              // ================= 提取缺漏与挂起提示 =================
+              
+              // 收集大模型的缺漏报告和警告
+              const missingStr = (formDecision.missing_fields || []).join("、");
+              const warningsStr = (formDecision.warnings || []).join("；");
+              
+              // 组装带排版的富文本提示信息
+              let hitlMessage = "✅ 表单已尝试批量填写！\n\n";
+              if (missingStr || warningsStr) {
+                  hitlMessage += "⚠️ 【重点检查项】\n";
+                  if (missingStr) hitlMessage += `❌ 未填字段：${missingStr}\n`;
+                  if (warningsStr) hitlMessage += `🚩 风险提示：${warningsStr}\n`;
+                  hitlMessage += "\n💡 提示：如果知识库中缺少对应内容，请您手动在网页上填好。填完后可以点击插件面板上的【更新知识库（当前表单）】将其永久保存进知识库！\n\n";
+              }
+              hitlMessage += "请仔细核对，确认无误后放行继续，或由您手动点击提交。";
+
+              // 执行物理填表
+              if (assignments.length > 0 || missingStr || warningsStr) {
+                  if (assignments.length > 0) {
+                      sendLog(`📝 准备物理写入 ${assignments.length} 个字段...`);
+                      await sendTabMessage(activeTab.id, {
+                          type: "FILL_FORM_FIELDS",
+                          payload: assignments
+                      });
+                  } else {
+                      sendLog("⚠️ 没有可写入的字段，请根据提示手动补充。");
+                  }
+                  
+                  if (missingStr) sendLog(`🔍 发现缺漏: ${missingStr}`);
+                  
+                  // 强制挂起让用户确认 (同样修复为 sendTabMessage)
+                  sendTabMessage(activeTab.id, { 
+                      type: "EXECUTE_ACTION", 
+                      action: { action: "show_hitl", message: hitlMessage } 
+                  }).catch(()=>{});
+                  
+                  broadcastStatus("WAITING"); 
+                  const userAction = await new Promise(resolve => { hitlResolver = resolve; });
+                  if (userAction === false) break; 
+                  // 🚨 捕获重新填写的指令
+                  if (userAction === "REFILL") {
+                      forceRefill = true;
+                      continue; // 跳回循环开头，无视过滤条件重填！
+                  } else {
+                      forceRefill = false; 
+                  }
+              } else {
+                  sendLog("⚠️ 简历中缺乏填写此表单所需的数据。");
+              }
+          } catch (e) {
+              sendLog(`❌ 填表子任务执行失败: ${e.message}`);
+          }
       }
       else if (actionData.action === "done") {
         const thought = actionData.thought || "";
@@ -291,111 +390,6 @@ function base64EncodeUnicode(text) {
   return btoa(binary);
 }
 
-export async function runFormFillTask(userTask) {
-  isAgentRunning = true;
-  broadcastStatus("RUNNING");
-  clearLogs();
-
-  try {
-    const activeTab = await getActiveTab();
-    validateRunnableTab(activeTab);
-
-    const { apiKey, kbData, resumeText } = await getKnowledgeBase();
-    const canonicalKbData = normalizeKnowledgeBase(kbData);
-    if (!apiKey) throw new Error("未配置 API Key，请先到选项页配置。");
-
-    sendLog("开始表单填写模式：正在扫描当前页面字段。");
-    const blocker = await detectAndPauseForBlocker(activeTab.id);
-    if (blocker.blocked) return;
-
-    const formScan = await sendTabMessage(activeTab.id, { type: "SCAN_FORM_FIELDS" });
-    if (!formScan || !Array.isArray(formScan.fields) || formScan.fields.length === 0) {
-      throw new Error("当前页面没有发现可填写的表单字段。");
-    }
-
-    if (formScan.isLoginPage) {
-      await sendTabMessage(activeTab.id, {
-        type: "EXECUTE_ACTION",
-        action: {
-          action: "show_hitl",
-          message: "检测到当前页面可能需要登录。Agent 已暂停，请你登录后重新启动填表任务。"
-        }
-      });
-      sendLog("检测到登录页，已暂停并交给用户登录。");
-      broadcastStatus("WAITING");
-      return;
-    }
-
-    const screenshotBase64 = await chrome.tabs.captureVisibleTab(activeTab.windowId, { format: "jpeg", quality: 70 });
-    const profile = {
-      knowledgeBase: canonicalKbData,
-      resumeText,
-      rememberedFormInfo: canonicalKbData.autofillMemory || {}
-    };
-
-    sendLog(`发现 ${formScan.fields.length} 个可填写字段，正在匹配简历信息。`);
-    const decision = await askVLM(apiKey, buildFormFillPrompt(userTask, formScan, profile), screenshotBase64);
-
-    const deterministicAssignments = buildDeterministicAssignments(formScan.fields, canonicalKbData);
-    const modelAssignments = normalizeAssignments(decision.assignments, formScan.fields, canonicalKbData);
-    const assignments = mergeAssignments(deterministicAssignments, modelAssignments);
-
-    if (assignments.length === 0) {
-      sendLog("没有找到可安全自动填写的字段。");
-      await sendTabMessage(activeTab.id, {
-        type: "SHOW_FORM_REVIEW_MODAL",
-        message: "没有找到可安全自动填写的字段，请手动检查当前页面。"
-      });
-      return;
-    }
-
-    sendLog(`准备填写 ${assignments.length} 个字段。不会点击提交按钮。`);
-    const fillResult = await sendTabMessage(activeTab.id, {
-      type: "FILL_FORM_FIELDS",
-      payload: assignments
-    });
-
-    const successCount = (fillResult.results || []).filter((item) => item.ok).length;
-    sendLog(`已填写 ${successCount}/${assignments.length} 个字段。`);
-
-    const reviewResult = await reviewAndCorrectFilledForm({
-      tabId: activeTab.id,
-      windowId: activeTab.windowId,
-      apiKey,
-      profile,
-      knowledgeBase: canonicalKbData
-    });
-    const reviewWarnings = reviewResult.warnings || [];
-
-    const warningText = Array.isArray(decision.warnings) && decision.warnings.length
-      ? `注意：${decision.warnings.join("；")}。`
-      : "";
-    const reviewWarningText = reviewWarnings.length
-      ? `质检提示：${reviewWarnings.join("；")}。`
-      : "";
-    const missingText = Array.isArray(decision.missing_fields) && decision.missing_fields.length
-      ? `还有这些字段资料不足，需要你手动填写或确认：${decision.missing_fields.join("、")}。`
-      : "";
-
-    await sendTabMessage(activeTab.id, {
-      type: "SHOW_FORM_REVIEW_MODAL",
-      message: `Agent 已暂停在提交前。${missingText}请检查表单内容，确认无误后由你手动提交。${warningText}${reviewWarningText}`
-    });
-  } catch (error) {
-    sendLog(`表单填写失败: ${error.message}`);
-  } finally {
-    isAgentRunning = false;
-    broadcastStatus("IDLE");
-
-    chrome.storage.local.get(['developerMode'], (res) => {
-      if (res.developerMode && devLogHistory.length > 0) {
-        sendLog("🛠️ 开发者模式已开启，正在生成表单执行日志...");
-        const mdContent = `# Web Agent 执行跟踪日志 (填表任务)\n\n**原始指令:** ${userTask}\n**生成时间:** ${new Date().toLocaleString()}\n\n## 完整执行流水线\n\n${devLogHistory.map(log => `- ${log}`).join('\n')}\n`;
-        saveMarkdownFile(mdContent, `Agent_FormFill_TraceLog_${Date.now()}.md`);
-      }
-    });
-  }
-}
 
 export async function extractProfileFromText(payload) {
   const { apiKey: storedApiKey, kbData, resumeText: storedResumeText } = await getKnowledgeBase();
@@ -624,24 +618,17 @@ function mergeAssignments(primary, secondary) {
 }
 
 function matchFieldKey(field) {
+  // 🚨 核心修复：坚决不信任 field.idAttr 和 field.name，防止底层代码的随意命名引发张冠李戴
+  // 只信任人类肉眼可见的文本 (Label, Placeholder)
   const text = normalizeFieldText([
     field.label,
     field.placeholder,
-    field.name,
-    field.idAttr,
     field.ariaLabel
   ].filter(Boolean).join(" "));
 
   const priorityKeys = [
-    "expected_position",
-    "email",
-    "phone",
-    "name",
-    "gender",
-    "education_level",
-    "graduation_year",
-    "major",
-    "school"
+    "expected_position", "email", "phone", "name", "gender", 
+    "education_level", "graduation_year", "major", "school"
   ];
 
   for (const key of priorityKeys) {
@@ -767,3 +754,14 @@ async function injectContentScripts(tabId) {
 export function isFormFillTask(task) {
   return /填表|填写|表单|简历|投递|申请|application|apply|form|resume|cv/i.test(task || "");
 }
+
+export function refillAgent() {
+  if (hitlResolver) {
+    hitlResolver("REFILL");
+    hitlResolver = null;
+    sendLog("🔄 用户请求重新填写，正在重新扫描并覆盖...");
+    broadcastStatus("RUNNING"); 
+  }
+}
+
+
